@@ -1,0 +1,327 @@
+/*
+Theme Name: Hype Pups
+Theme URI: http://example.com/
+Author: Your Name
+Author URI: http://example.com/
+Description: A custom WordPress theme for Hype Pups.
+Version: 1.0
+License: GNU General Public License v2 or later
+License URI: http://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: hype-pups
+Tags: custom, theme
+*/
+
+/* Add your theme styles below */
+
+/* Shop Page Styles */
+.woocommerce-products-header {
+    margin-bottom: 2rem;
+}
+
+.woocommerce-ordering select {
+    @apply rounded-md border-gray-300 py-2 pl-3 pr-10 text-base focus:border-[#FF3A5E] focus:outline-none focus:ring-[#FF3A5E] sm:text-sm;
+}
+
+/* Product Grid */
+.products {
+    @apply grid grid-cols-1 gap-y-10 gap-x-6 sm:grid-cols-2 lg:grid-cols-3 xl:gap-x-8;
+}
+
+/* Product Card */
+.product {
+    @apply group relative;
+}
+
+.product .woocommerce-loop-product__title {
+    @apply mt-4 text-sm text-gray-700;
+}
+
+.product .price {
+    @apply mt-1 text-sm font-medium text-gray-900;
+}
+
+.product .onsale {
+    @apply absolute top-2 left-2 z-10 inline-flex items-center rounded-full bg-[#FF3A5E] px-2 py-1 text-xs font-medium text-white;
+}
+
+/* Quick View and Add to Cart Buttons */
+.product .quick-view,
+.product .add_to_cart_button {
+    @apply absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity;
+}
+
+.product .quick-view {
+    @apply top-1/3;
+}
+
+.product .add_to_cart_button {
+    @apply top-2/3;
+}
+
+/* Filter Widgets */
+.widget {
+    @apply mb-6;
+}
+
+.widget-title {
+    @apply text-sm font-medium text-gray-900 mb-2;
+}
+
+.widget ul {
+    @apply space-y-2;
+}
+
+.widget ul li {
+    @apply text-sm text-gray-600;
+}
+
+.widget ul li a {
+    @apply hover:text-[#FF3A5E];
+}
+
+/* Price Filter */
+.price_slider {
+    @apply relative h-2 bg-gray-200 rounded-full;
+}
+
+.price_slider .ui-slider-range {
+    @apply absolute h-full bg-[#FF3A5E] rounded-full;
+}
+
+.price_slider .ui-slider-handle {
+    @apply absolute w-4 h-4 bg-white border-2 border-[#FF3A5E] rounded-full -mt-1 cursor-pointer;
+}
+
+/* Mobile Filters */
+@media (max-width: 1024px) {
+    .shop-sidebar {
+        @apply fixed inset-0 z-50 bg-white p-4 transform transition-transform duration-300 ease-in-out;
+    }
+
+    .shop-sidebar.hidden {
+        @apply -translate-x-full;
+    }
+}
+
+/* Pagination */
+.woocommerce-pagination {
+    @apply mt-8;
+}
+
+.woocommerce-pagination ul {
+    @apply flex justify-center space-x-2;
+}
+
+.woocommerce-pagination ul li {
+    @apply inline-flex;
+}
+
+.woocommerce-pagination ul li a,
+.woocommerce-pagination ul li span {
+    @apply px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50;
+}
+
+.woocommerce-pagination ul li span.current {
+    @apply bg-[#FF3A5E] text-white border-[#FF3A5E];
+}
+
+.custom-checkbox {
+  accent-color: #FF3A5E;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+.size-btn {
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  background: #fff;
+  font-weight: 500;
+  transition: border 0.2s, background 0.2s;
+  cursor: pointer;
+}
+.size-btn.selected,
+.size-btn:active {
+  border-color: #FF3A5E;
+  background: #ffe0e7;
+}
+.color-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 2px solid #e5e7eb;
+  cursor: pointer;
+}
+.color-swatch.selected {
+  border-color: #FF3A5E;
+  box-shadow: 0 0 0 2px #ffe0e7;
+}
+.apply-filters-btn {
+  background: #FF3A5E;
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0.75rem 0;
+  margin-bottom: 0.5rem;
+  border: none;
+}
+.reset-filters-btn {
+  background: #fff;
+  color: #333;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0.75rem 0;
+  text-align: center;
+  display: block;
+}
+
+/* Blog Content Styles */
+.blog-content {
+    font-family: 'Montserrat', sans-serif;
+}
+
+.blog-content h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    color: #1A1A1A;
+}
+
+.blog-content h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    color: #1A1A1A;
+}
+
+.blog-content p {
+    margin-bottom: 1.25rem;
+    line-height: 1.7;
+    color: #4B5563;
+}
+
+.blog-content ul, 
+.blog-content ol {
+    margin-bottom: 1.25rem;
+    padding-left: 1.5rem;
+    color: #4B5563;
+}
+
+.blog-content ul {
+    list-style-type: disc;
+}
+
+.blog-content ol {
+    list-style-type: decimal;
+}
+
+.blog-content li {
+    margin-bottom: 0.5rem;
+    line-height: 1.7;
+}
+
+.blog-content blockquote {
+    border-left: 4px solid #FF3A5E;
+    padding-left: 1rem;
+    font-style: italic;
+    margin: 1.5rem 0;
+    color: #4B5563;
+}
+
+.blog-content a {
+    color: #FF3A5E;
+    text-decoration: underline;
+    transition: color 0.2s;
+}
+
+.blog-content a:hover {
+    color: #E02E50;
+    text-decoration: none;
+}
+
+.blog-content img {
+    border-radius: 0.5rem;
+    margin: 1.5rem 0;
+    max-width: 100%;
+    height: auto;
+}
+
+.blog-content pre {
+    background-color: #F3F4F6;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+    margin: 1.5rem 0;
+}
+
+.blog-content code {
+    font-family: monospace;
+    background-color: #F3F4F6;
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+}
+
+.blog-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+}
+
+.blog-content th,
+.blog-content td {
+    padding: 0.75rem;
+    border: 1px solid #E5E7EB;
+}
+
+.blog-content th {
+    background-color: #F3F4F6;
+    font-weight: 600;
+    text-align: left;
+}
+
+.blog-content tr:nth-child(even) {
+    background-color: #F9FAFB;
+}
+
+/* Comment Form Styles */
+.comment-form input:focus, 
+.comment-form textarea:focus {
+    outline: none;
+    border-color: #FF3A5E;
+    box-shadow: 0 0 0 1px #FF3A5E;
+}
+
+.comment-form input,
+.comment-form textarea {
+    transition: all 0.2s;
+}
+
+.comment-form input:hover,
+.comment-form textarea:hover {
+    border-color: #D1D5DB;
+}
+
+/* Share Buttons */
+.share-button {
+    transition: all 0.2s;
+}
+
+.share-button:hover {
+    background-color: #F3F4F6;
+    color: #FF3A5E;
+}
+
+/* Newsletter Form */
+.newsletter-form input:focus {
+    outline: none;
+    border-color: #FF3A5E;
+}
+
+.newsletter-form input:hover {
+    border-color: rgba(255, 255, 255, 0.4);
+} 
