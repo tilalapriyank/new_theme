@@ -3331,3 +3331,671 @@ function hype_pups_enqueue_yith_wishlist_scripts() {
 add_action('wp_enqueue_scripts', 'hype_pups_enqueue_yith_wishlist_scripts');
     
 
+///////// FAHIM KAAAAND ////////////
+
+// Enqueue required scripts and styles
+function enqueue_filter_assets() {
+    if (is_shop() || is_product_category() || is_product_tag()) {
+        // Enqueue Alpine.js for mobile filters
+        wp_enqueue_script('alpine-js', 'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js', [], '3.0', true);
+        wp_script_add_data('alpine-js', 'defer', true);
+        
+        // Localize script for AJAX
+        wp_localize_script('alpine-js', 'woo_filter_ajax', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('filter_nonce'),
+            'cart_url' => wc_get_cart_url(),
+        ]);
+    }
+}
+add_action('wp_enqueue_scripts', 'enqueue_filter_assets');
+
+// AJAX handler to get filter options
+function handle_get_filter_options() {
+    // Verify nonce
+    if (!wp_verify_nonce($_POST['nonce'], 'filter_nonce')) {
+        wp_die('Security check failed');
+    }
+    
+    global $wpdb;
+    
+    // Get price range from all published products
+    $price_range = $wpdb->get_row("
+        SELECT 
+            MIN(CAST(pm.meta_value AS DECIMAL(10,2))) as min_price,
+            MAX(CAST(pm.meta_value AS DECIMAL(10,2))) as max_price
+        FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+        WHERE p.post_type = 'product'
+        AND p.post_status = 'publish'
+        AND pm.meta_key = '_price'
+        AND pm.meta_value != ''
+        AND pm.meta_value > 0
+    ");
+    
+    // Get product categories (only parent categories)
+    $categories = get_terms([
+        'taxonomy' => 'product_cat',
+        'hide_empty' => true,
+        'parent' => 0,
+        'orderby' => 'name',
+        'order' => 'ASC'
+    ]);
+    
+    $category_data = [];
+    if (!is_wp_error($categories)) {
+        $category_data = array_map(function($cat) {
+            return [
+                'slug' => $cat->slug,
+                'name' => $cat->name,
+                'count' => $cat->count
+            ];
+        }, $categories);
+    }
+    
+    // Get product attributes (sizes and colors)
+    $attributes = [
+        'sizes' => get_product_attribute_values('size'),
+        'colors' => get_product_attribute_values('color')
+    ];
+    
+    wp_send_json_success([
+        'price_range' => [
+            'min' => floor($price_range->min_price ?? 0),
+            'max' => ceil($price_range->max_price ?? 1000)
+        ],
+        'categories' => $category_data,
+        'attributes' => $attributes
+    ]);
+}
+add_action('wp_ajax_get_filter_options', 'handle_get_filter_options');
+add_action('wp_ajax_nopriv_get_filter_options', 'handle_get_filter_options');
+
+// Helper function to get product attribute values
+function get_product_attribute_values($attribute_name) {
+    global $wpdb;
+    
+    $values = [];
+    
+    // 1. Get global attribute terms (pa_attribute)
+    $taxonomy = 'pa_' . $attribute_name;
+    $terms = get_terms([
+        'taxonomy' => $taxonomy,
+        'hide_empty' => true,
+        'orderby' => 'name',
+        'order' => 'ASC'
+    ]);
+    
+    if (!is_wp_error($terms)) {
+        foreach ($terms as $term) {
+            $values[] = [
+                'slug' => $term->slug,
+                'name' => $term->name,
+                'value' => $term->slug
+            ];
+        }
+    }
+    
+    // 2. Get custom attribute values from product variations and simple products
+    $custom_values = $wpdb->get_results($wpdb->prepare("
+        SELECT DISTINCT pm.meta_value
+        FROM {$wpdb->posts} p
+        INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+        WHERE p.post_type IN ('product', 'product_variation')
+        AND p.post_status = 'publish'
+        AND pm.meta_key = %s
+        AND pm.meta_value != ''
+        ORDER BY pm.meta_value
+    ", 'attribute_' . $attribute_name));
+    
+    foreach ($custom_values as $value) {
+        $slug = sanitize_title($value->meta_value);
+        // Check if this slug already exists to avoid duplicates
+        $exists = false;
+        foreach ($values as $existing) {
+            if ($existing['slug'] === $slug) {
+                $exists = true;
+                break;
+            }
+        }
+        
+        if (!$exists) {
+            $values[] = [
+                'slug' => $slug,
+                'name' => $value->meta_value,
+                'value' => $value->meta_value
+            ];
+        }
+    }
+    
+    return $values;
+}
+
+// AJAX handler for filtering products
+function handle_filter_products() {
+    // Verify nonce
+    if (!wp_verify_nonce($_POST['nonce'], 'filter_nonce')) {
+        wp_die('Security check failed');
+    }
+    
+    $filters = json_decode(stripslashes($_POST['filters']), true);
+    $category_slug = sanitize_text_field($_POST['category_slug'] ?? '');
+    
+    // Build WP_Query arguments
+    $args = [
+        'post_type' => 'product',
+        'post_status' => 'publish',
+        'posts_per_page' => 12,
+        'paged' => intval($filters['paged'] ?? 1),
+        'meta_query' => ['relation' => 'AND'],
+        'tax_query' => ['relation' => 'AND']
+    ];
+    
+    // Category filter
+    if (!empty($filters['categories'])) {
+        $args['tax_query'][] = [
+            'taxonomy' => 'product_cat',
+            'field' => 'slug',
+            'terms' => array_map('sanitize_text_field', $filters['categories']),
+            'operator' => 'IN'
+        ];
+    } elseif (!empty($category_slug)) {
+        // Maintain category context if on a category page
+        $args['tax_query'][] = [
+            'taxonomy' => 'product_cat',
+            'field' => 'slug',
+            'terms' => $category_slug
+        ];
+    }
+    
+    // Price filter
+    if (!empty($filters['min_price']) || !empty($filters['max_price'])) {
+        $min_price = floatval($filters['min_price'] ?? 0);
+        $max_price = floatval($filters['max_price'] ?? 999999);
+        
+        $args['meta_query'][] = [
+            'key' => '_price',
+            'value' => [$min_price, $max_price],
+            'type' => 'NUMERIC',
+            'compare' => 'BETWEEN'
+        ];
+    }
+    
+    // Handle attribute filters (sizes and colors)
+    $attribute_product_ids = null;
+    
+    if (!empty($filters['sizes']) || !empty($filters['colors'])) {
+        $attribute_product_ids = get_products_by_attributes($filters);
+        
+        if (empty($attribute_product_ids)) {
+            // No products match the attribute criteria
+            $args['post__in'] = [0]; // This will return no results
+        } else {
+            $args['post__in'] = $attribute_product_ids;
+        }
+    }
+    
+    // Sorting
+    $orderby = sanitize_text_field($filters['orderby'] ?? 'menu_order');
+    switch ($orderby) {
+        case 'price':
+            $args['meta_key'] = '_price';
+            $args['orderby'] = 'meta_value_num';
+            $args['order'] = 'ASC';
+            break;
+        case 'price-desc':
+            $args['meta_key'] = '_price';
+            $args['orderby'] = 'meta_value_num';
+            $args['order'] = 'DESC';
+            break;
+        case 'popularity':
+            $args['meta_key'] = 'total_sales';
+            $args['orderby'] = 'meta_value_num';
+            $args['order'] = 'DESC';
+            break;
+        case 'rating':
+            $args['meta_key'] = '_wc_average_rating';
+            $args['orderby'] = 'meta_value_num';
+            $args['order'] = 'DESC';
+            break;
+        case 'date':
+            $args['orderby'] = 'date';
+            $args['order'] = 'DESC';
+            break;
+        default:
+            $args['orderby'] = 'menu_order';
+            $args['order'] = 'ASC';
+            break;
+    }
+    
+    // Execute the query
+    $query = new WP_Query($args);
+    
+    // Generate products HTML
+    ob_start();
+    if ($query->have_posts()) {
+        while ($query->have_posts()) {
+            $query->the_post();
+            render_product_card();
+        }
+    } else {
+        echo '<div class="col-span-full text-center py-12">';
+        echo '<div class="text-gray-500 mb-4">';
+        echo '<svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto mb-4 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">';
+        echo '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.47-.881-6.08-2.33" />';
+        echo '</svg>';
+        echo '<p class="text-lg font-medium">No products found</p>';
+        echo '<p class="text-sm">Try adjusting your filters or search criteria</p>';
+        echo '</div>';
+        echo '<button onclick="wooFilters.clearAllFilters()" class="bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white px-6 py-2 rounded-md font-medium transition-colors">';
+        echo 'Clear all filters';
+        echo '</button>';
+        echo '</div>';
+    }
+    $products_html = ob_get_clean();
+    
+    // Generate pagination HTML
+    $pagination_html = generate_pagination_html($query);
+    
+    wp_reset_postdata();
+    
+    wp_send_json_success([
+        'products' => $products_html,
+        'found_posts' => $query->found_posts,
+        'pagination' => $pagination_html
+    ]);
+}
+add_action('wp_ajax_filter_products', 'handle_filter_products');
+add_action('wp_ajax_nopriv_filter_products', 'handle_filter_products');
+
+// Helper function to get products matching attribute filters
+function get_products_by_attributes($filters) {
+    global $wpdb;
+    
+    $queries = [];
+    $all_params = [];
+    
+    // Build queries for each attribute type
+    if (!empty($filters['sizes'])) {
+        $size_values = array_map('sanitize_text_field', $filters['sizes']);
+        $size_placeholders = implode(',', array_fill(0, count($size_values), '%s'));
+        
+        $queries[] = "
+            SELECT DISTINCT 
+                CASE 
+                    WHEN p.post_type = 'product_variation' THEN p.post_parent
+                    ELSE p.ID
+                END as product_id
+            FROM {$wpdb->posts} p
+            LEFT JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+            LEFT JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id
+            LEFT JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+            LEFT JOIN {$wpdb->terms} t ON tt.term_id = t.term_id
+            WHERE p.post_status = 'publish'
+            AND p.post_type IN ('product', 'product_variation')
+            AND (
+                (pm.meta_key = 'attribute_size' AND pm.meta_value IN ($size_placeholders))
+                OR (tt.taxonomy = 'pa_size' AND t.slug IN ($size_placeholders))
+            )
+        ";
+        $all_params = array_merge($all_params, $size_values, $size_values);
+    }
+    
+    if (!empty($filters['colors'])) {
+        $color_values = array_map('sanitize_text_field', $filters['colors']);
+        $color_placeholders = implode(',', array_fill(0, count($color_values), '%s'));
+        
+        $queries[] = "
+            SELECT DISTINCT 
+                CASE 
+                    WHEN p.post_type = 'product_variation' THEN p.post_parent
+                    ELSE p.ID
+                END as product_id
+            FROM {$wpdb->posts} p
+            LEFT JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+            LEFT JOIN {$wpdb->term_relationships} tr ON p.ID = tr.object_id
+            LEFT JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+            LEFT JOIN {$wpdb->terms} t ON tt.term_id = t.term_id
+            WHERE p.post_status = 'publish'
+            AND p.post_type IN ('product', 'product_variation')
+            AND (
+                (pm.meta_key = 'attribute_color' AND pm.meta_value IN ($color_placeholders))
+                OR (tt.taxonomy = 'pa_color' AND t.slug IN ($color_placeholders))
+            )
+        ";
+        $all_params = array_merge($all_params, $color_values, $color_values);
+    }
+    
+    if (empty($queries)) {
+        return null;
+    }
+    
+    // If multiple attribute filters, get intersection (products that match ALL filters)
+    if (count($queries) > 1) {
+        $sql = "
+            SELECT product_id 
+            FROM (
+                (" . implode(') INTERSECT (', $queries) . ")
+            ) as matched_products
+        ";
+    } else {
+        // Single attribute filter
+        $sql = $queries[0];
+    }
+    
+    // Execute the query
+    $product_ids = $wpdb->get_col($wpdb->prepare($sql, $all_params));
+    
+    // Filter out any invalid IDs and ensure they're integers
+    $product_ids = array_filter(array_map('intval', $product_ids));
+    
+    return $product_ids;
+}
+
+// Function to render individual product cards
+function render_product_card() {
+    global $product;
+    
+    // Validate product object
+    if (!$product || !is_object($product) || !method_exists($product, 'get_id')) {
+        return;
+    }
+    
+    $product_id = $product->get_id();
+    $product_link = get_permalink($product_id);
+    $product_img = get_the_post_thumbnail_url($product_id, 'woocommerce_thumbnail');
+    $product_title = $product->get_name();
+    $review_count = $product->get_review_count();
+    $average = $product->get_average_rating();
+    
+    // Determine product badge
+    $badge_label = '';
+    $badge_class = '';
+    if ($product->is_on_sale()) {
+        $badge_label = 'SALE';
+        $badge_class = 'sale';
+    } elseif ((time() - strtotime($product->get_date_created())) < (30 * 24 * 60 * 60)) {
+        $badge_label = 'NEW';
+        $badge_class = 'new';
+    } elseif ($product->get_attribute('pa_limited') || $product->get_attribute('limited')) {
+        $badge_label = 'LIMITED';
+        $badge_class = 'limited';
+    }
+    ?>
+    
+    <div class="rounded-lg overflow-hidden border-none shadow-md group bg-white relative transition-all duration-200 hover:shadow-lg">
+        <!-- Product Badge -->
+        <?php if ($badge_label) : ?>
+            <span class="product-badge <?php echo esc_attr($badge_class); ?>">
+                <?php echo esc_html($badge_label); ?>
+            </span>
+        <?php endif; ?>
+        
+        <!-- Wishlist Button -->
+        <div class="absolute top-4 right-4 z-20">
+            <?php if (function_exists('YITH_WCWL')) : ?>
+                <?php echo do_shortcode('[yith_wcwl_add_to_wishlist product_id="' . esc_attr($product_id) . '" label="" browse_wishlist_text="" already_in_wishlist_text="" product_added_text="" show_count="no"]'); ?>
+            <?php else : ?>
+                <button class="wishlist-fallback bg-white shadow-lg rounded-full p-2 flex items-center justify-center transition hover:bg-gray-100" 
+                        onclick="alert('Wishlist functionality requires YITH WooCommerce Wishlist plugin');" 
+                        aria-label="Add to wishlist">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                    </svg>
+                </button>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Product Link -->
+        <a href="<?php echo esc_url($product_link); ?>" class="block group/card focus:outline-none" style="text-decoration: none;">
+            <div class="relative">
+                <!-- Product Image -->
+                <div class="aspect-square relative overflow-hidden bg-gray-100 flex items-center justify-center">
+                    <?php if ($product_img) : ?>
+                        <img src="<?php echo esc_url($product_img); ?>" 
+                             alt="<?php echo esc_attr($product_title); ?>" 
+                             class="object-cover w-full h-full transition-transform duration-500 group-hover/card:scale-105">
+                    <?php else : ?>
+                        <div class="w-full h-full bg-gray-200 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Hover Overlay with Actions -->
+                <div class="absolute inset-0 flex flex-col items-center pb-4 justify-end bg-black/60 opacity-0 group-hover/card:opacity-100 transition-opacity z-10">
+                    <!-- Quick View Button -->
+                    <a href="<?php echo esc_url($product_link); ?>" 
+                       class="flex items-center w-56 mb-4 justify-center bg-white text-gray-800 font-medium rounded-lg px-4 py-2 shadow hover:bg-gray-100 text-base gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" class="w-5 h-5">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        Quick View
+                    </a>
+                    
+                    <!-- Add to Cart / Select Options Button -->
+                    <?php if ($product->get_type() === 'variable') : ?>
+                        <a href="<?php echo esc_url($product_link); ?>" 
+                           class="bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white w-56 py-2 px-4 rounded-lg text-base font-medium flex items-center justify-center shadow">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4 mr-2">
+                                <circle cx="8" cy="21" r="1"></circle>
+                                <circle cx="19" cy="21" r="1"></circle>
+                                <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path>
+                            </svg>
+                            Select Options
+                        </a>
+                    <?php else : ?>
+                        <button type="button" 
+                                class="ajax-add-to-cart bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white w-56 py-2 px-4 rounded-lg text-base font-medium flex items-center justify-center shadow" 
+                                data-product_id="<?php echo esc_attr($product_id); ?>" 
+                                data-quantity="1">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4 mr-2">
+                                <circle cx="8" cy="21" r="1"></circle>
+                                <circle cx="19" cy="21" r="1"></circle>
+                                <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path>
+                            </svg>
+                            <span class="add-to-cart-text">Add to Cart</span>
+                        </button>
+                    <?php endif; ?>
+                </div>
+            </div>
+            
+            <!-- Product Info -->
+            <div class="p-6 pt-4">
+                <!-- Product Title -->
+                <div class="mb-2">
+                    <span class="block text-base font-bold font-montserrat <?php echo $product->is_on_sale() ? 'text-[#ed1c24]' : 'text-gray-800'; ?>" style="line-height:1.2;">
+                        <?php echo esc_html($product_title); ?>
+                    </span>
+                </div>
+                
+                <!-- Product Rating -->
+                <div class="flex items-center gap-1 mb-2">
+                    <?php for ($i = 1; $i <= 5; $i++) : ?>
+                        <?php if ($i <= round($average)) : ?>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 fill-[#FFD100] text-[#FFD100]" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                        <?php else : ?>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-300" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                        <?php endif; ?>
+                    <?php endfor; ?>
+                    <span class="text-xs text-gray-500 ml-1">(<?php echo esc_html($review_count); ?>)</span>
+                </div>
+                
+                <!-- Product Price -->
+                <div class="flex items-center gap-2 mt-1">
+                    <?php if ($product->is_on_sale()) : ?>
+                        <span class="text-lg font-bold text-[#ed1c24]">
+                            <?php echo wc_price($product->get_sale_price()); ?>
+                        </span>
+                        <span class="text-base font-semibold text-gray-400 line-through">
+                            <?php echo wc_price($product->get_regular_price()); ?>
+                        </span>
+                    <?php else : ?>
+                        <span class="text-lg font-bold text-gray-800">
+                            <?php echo wc_price($product->get_price()); ?>
+                        </span>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </a>
+    </div>
+    
+    <?php
+}
+
+// Generate pagination HTML
+function generate_pagination_html($query) {
+    if ($query->max_num_pages <= 1) {
+        return '';
+    }
+    
+    $current_page = max(1, $query->get('paged'));
+    $total_pages = $query->max_num_pages;
+    
+    $pagination = '<div class="flex items-center gap-2 justify-center">';
+    
+    // Previous button
+    if ($current_page > 1) {
+        $pagination .= '<a href="#" class="page-link flex items-center px-3 py-2" data-page="' . ($current_page - 1) . '">';
+        $pagination .= '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">';
+        $pagination .= '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />';
+        $pagination .= '</svg>Previous</a>';
+    }
+    
+    // Page numbers
+    $start = max(1, $current_page - 2);
+    $end = min($total_pages, $current_page + 2);
+    
+    // First page + ellipsis
+    if ($start > 1) {
+        $pagination .= '<a href="#" class="page-link" data-page="1">1</a>';
+        if ($start > 2) {
+            $pagination .= '<span class="px-3 py-2 text-gray-400">...</span>';
+        }
+    }
+    
+    // Page number links
+    for ($i = $start; $i <= $end; $i++) {
+        $class = $i === $current_page ? 'page-link current' : 'page-link';
+        $pagination .= '<a href="#" class="' . $class . '" data-page="' . $i . '">' . $i . '</a>';
+    }
+    
+    // Last page + ellipsis
+    if ($end < $total_pages) {
+        if ($end < $total_pages - 1) {
+            $pagination .= '<span class="px-3 py-2 text-gray-400">...</span>';
+        }
+        $pagination .= '<a href="#" class="page-link" data-page="' . $total_pages . '">' . $total_pages . '</a>';
+    }
+    
+    // Next button
+    if ($current_page < $total_pages) {
+        $pagination .= '<a href="#" class="page-link flex items-center px-3 py-2" data-page="' . ($current_page + 1) . '">';
+        $pagination .= 'Next<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">';
+        $pagination .= '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />';
+        $pagination .= '</svg></a>';
+    }
+    
+    $pagination .= '</div>';
+    
+    return $pagination;
+}
+
+// Add custom CSS for product badges and other styling
+function add_filter_system_styles() {
+    if (is_shop() || is_product_category() || is_product_tag()) {
+        ?>
+        <style>
+        /* Product Badge Styles */
+        .product-badge {
+            position: absolute;
+            top: 18px;
+            left: 18px;
+            z-index: 20;
+            padding: 6px 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            border-radius: 999px;
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+            text-transform: uppercase;
+            line-height: 1;
+        }
+        .product-badge.sale { background: #ed1c24; }
+        .product-badge.new { background: #2563eb; }
+        .product-badge.limited { background: #a259e6; }
+        
+        /* YITH Wishlist Styling - Heart Icon Only */
+        .yith-wcwl-add-to-wishlist,
+        .yith-wcwl-add-to-wishlist * {
+            font-size: 0 !important;
+            color: transparent !important;
+            text-indent: -9999px !important;
+            line-height: 0 !important;
+        }
+        .yith-wcwl-add-to-wishlist .yith-wcwl-add-button a,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 40px !important;
+            height: 40px !important;
+            background: white !important;
+            border-radius: 50% !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.10) !important;
+            transition: all 0.2s ease !important;
+            text-decoration: none !important;
+            border: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            position: relative;
+        }
+        .yith-wcwl-add-to-wishlist .yith-wcwl-add-button a:before,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:before,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a:before {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            background-size: contain;
+            background-repeat: no-repeat;
+        }
+        .yith-wcwl-add-to-wishlist .yith-wcwl-add-button a:before {
+            background-image: url('data:image/svg+xml;utf8,<svg fill="none" stroke="%236b7280" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>');
+        }
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a {
+            background: #ed1c24 !important;
+        }
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:before,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a:before {
+            background-image: url('data:image/svg+xml;utf8,<svg fill="%23ffffff" stroke="%23ffffff" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>');
+        }
+        .yith-wcwl-add-to-wishlist span,
+        .yith-wcwl-add-to-wishlist .yith-wcwl-icon {
+            display: none !important;
+        }
+        </style>
+        <?php
+    }
+}
+add_action('wp_head', 'add_filter_system_styles');
+
+// Disable default WooCommerce scripts that might conflict
+function disable_conflicting_woo_scripts() {
+    if (is_shop() || is_product_category() || is_product_tag()) {
+        // Remove default WooCommerce ordering
+        remove_action('woocommerce_before_shop_loop', 'woocommerce_catalog_ordering', 30);
+        remove_action('woocommerce_before_shop_loop', 'woocommerce_result_count', 20);
+    }
+}
+add_action('init', 'disable_conflicting_woo_scripts');
