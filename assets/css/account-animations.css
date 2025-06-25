@@ -1,0 +1,340 @@
+/* Account Page Animations - Fixed for Live Site */
+
+/* Force animations to work with higher specificity */
+body .form-container {
+  animation: containerFadeIn 0.8s ease-out !important;
+  opacity: 1 !important;
+  transform: translateY(0) scale(1) !important;
+  -webkit-animation: containerFadeIn 0.8s ease-out !important;
+  -moz-animation: containerFadeIn 0.8s ease-out !important;
+}
+
+@keyframes containerFadeIn {
+  0% {
+    opacity: 0 !important;
+    transform: translateY(30px) scale(0.95) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    transform: translateY(0) scale(1) !important;
+  }
+}
+
+@-webkit-keyframes containerFadeIn {
+  0% {
+    opacity: 0 !important;
+    -webkit-transform: translateY(30px) scale(0.95) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    -webkit-transform: translateY(0) scale(1) !important;
+  }
+}
+
+/* Toggle container animation */
+body .toggle-container {
+  animation: toggleSlideIn 0.5s ease-out 0.2s both !important;
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  -webkit-animation: toggleSlideIn 0.5s ease-out 0.2s both !important;
+  -moz-animation: toggleSlideIn 0.5s ease-out 0.2s both !important;
+}
+
+@keyframes toggleSlideIn {
+  0% {
+    opacity: 0 !important;
+    transform: translateY(-10px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+}
+
+@-webkit-keyframes toggleSlideIn {
+  0% {
+    opacity: 0 !important;
+    -webkit-transform: translateY(-10px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    -webkit-transform: translateY(0) !important;
+  }
+}
+
+/* Logo/brand animation */
+body .brand-section {
+  animation: brandFadeIn 0.6s ease-out 0.1s both !important;
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  -webkit-animation: brandFadeIn 0.6s ease-out 0.1s both !important;
+  -moz-animation: brandFadeIn 0.6s ease-out 0.1s both !important;
+}
+
+@keyframes brandFadeIn {
+  0% {
+    opacity: 0 !important;
+    transform: translateY(-20px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+}
+
+@-webkit-keyframes brandFadeIn {
+  0% {
+    opacity: 0 !important;
+    -webkit-transform: translateY(-20px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    -webkit-transform: translateY(0) !important;
+  }
+}
+
+/* Button hover animations */
+body .btn-hover-animate {
+  transition: all 0.2s ease !important;
+  -webkit-transition: all 0.2s ease !important;
+  -moz-transition: all 0.2s ease !important;
+}
+
+body .btn-hover-animate:hover {
+  transform: translateY(-1px) !important;
+  -webkit-transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(255, 58, 94, 0.2) !important;
+}
+
+/* Input focus animations */
+body .input-focus-animate {
+  transition: all 0.2s ease !important;
+  -webkit-transition: all 0.2s ease !important;
+  -moz-transition: all 0.2s ease !important;
+}
+
+body .input-focus-animate:focus {
+  transform: translateY(-1px) !important;
+  -webkit-transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(255, 58, 94, 0.1) !important;
+}
+
+/* Loading animation */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@-webkit-keyframes spin {
+  0% { -webkit-transform: rotate(0deg); }
+  100% { -webkit-transform: rotate(360deg); }
+}
+
+body .animate-spin {
+  animation: spin 1s linear infinite !important;
+  -webkit-animation: spin 1s linear infinite !important;
+}
+
+/* Success/Error message animations */
+body .message-animate {
+  animation: messageSlideIn 0.3s ease-out !important;
+  -webkit-animation: messageSlideIn 0.3s ease-out !important;
+}
+
+@keyframes messageSlideIn {
+  0% {
+    opacity: 0 !important;
+    transform: translateY(-10px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+}
+
+@-webkit-keyframes messageSlideIn {
+  0% {
+    opacity: 0 !important;
+    -webkit-transform: translateY(-10px) !important;
+  }
+  100% {
+    opacity: 1 !important;
+    -webkit-transform: translateY(0) !important;
+  }
+}
+
+/* Form toggle animations */
+body .form-transition {
+  transition: all 0.3s ease-in-out !important;
+  -webkit-transition: all 0.3s ease-in-out !important;
+  -moz-transition: all 0.3s ease-in-out !important;
+}
+
+body .form-hidden {
+  opacity: 0 !important;
+  transform: translateY(10px) !important;
+  -webkit-transform: translateY(10px) !important;
+  pointer-events: none !important;
+}
+
+body .form-visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  -webkit-transform: translateY(0) !important;
+  pointer-events: auto !important;
+}
+
+/* Toggle button styles */
+body .toggle-btn {
+  padding: 0.5rem 1rem !important;
+  border-radius: 0.375rem !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  transition: all 0.2s ease !important;
+  -webkit-transition: all 0.2s ease !important;
+  cursor: pointer !important;
+  border: none !important;
+  background: transparent !important;
+}
+
+body .toggle-btn.active {
+  background-color: white !important;
+  color: #111827 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06) !important;
+}
+
+body .toggle-btn:not(.active) {
+  background-color: transparent !important;
+  color: #6B7280 !important;
+}
+
+body .toggle-btn:not(.active):hover {
+  color: #111827 !important;
+}
+
+/* Fixed button styles without @apply */
+body #wp-submit, body #register-submit {
+  width: 100% !important;
+  display: flex !important;
+  justify-content: center !important;
+  padding: 0.75rem 1rem !important;
+  border: 2px solid transparent !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1) !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  color: white !important;
+  background-color: #FF3A5E !important;
+  border-color: #FF3A5E !important;
+  outline: none !important;
+  transition: all 0.2s ease !important;
+  -webkit-transition: all 0.2s ease !important;
+  transform: scale(1) !important;
+  -webkit-transform: scale(1) !important;
+}
+
+body #wp-submit:hover, body #register-submit:hover {
+  background-color: #e62a4d !important;
+  border-color: #e62a4d !important;
+  transform: scale(1.02) !important;
+  -webkit-transform: scale(1.02) !important;
+  box-shadow: 0 4px 12px rgba(255, 58, 94, 0.2) !important;
+}
+
+/* Fixed input styles without @apply */
+body #user_login, body #user_pass, body #reg_first_name, body #reg_last_name, body #reg_email, body #reg_username, body #reg_password, body #reg_confirm_password {
+  display: block !important;
+  width: 100% !important;
+  padding: 0.625rem 0.75rem 0.625rem 2.5rem !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 0.5rem !important;
+  outline: none !important;
+  font-size: 0.875rem !important;
+  transition: all 0.2s ease !important;
+  -webkit-transition: all 0.2s ease !important;
+}
+
+body #user_login:focus, body #user_pass:focus, body #reg_first_name:focus, body #reg_last_name:focus, body #reg_email:focus, body #reg_username:focus, body #reg_password:focus, body #reg_confirm_password:focus {
+  border-color: #FF3A5E !important;
+  box-shadow: 0 0 0 3px rgba(255, 58, 94, 0.1) !important;
+  transform: translateY(-1px) !important;
+  -webkit-transform: translateY(-1px) !important;
+}
+
+/* Fixed checkbox styles */
+body #rememberme, body #terms_agreement {
+  height: 1rem !important;
+  width: 1rem !important;
+  color: #FF3A5E !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 0.25rem !important;
+}
+
+/* Form layout styles */
+body #loginform, body #registerform {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1.5rem !important;
+}
+
+/* Ensure animations work on all browsers */
+body * {
+  -webkit-animation-fill-mode: both !important;
+  animation-fill-mode: both !important;
+}
+
+/* Force hardware acceleration */
+body .form-container,
+body .toggle-container,
+body .brand-section {
+  -webkit-transform: translateZ(0) !important;
+  transform: translateZ(0) !important;
+  -webkit-backface-visibility: hidden !important;
+  backface-visibility: hidden !important;
+  -webkit-perspective: 1000px !important;
+  perspective: 1000px !important;
+}
+
+/* Responsive animations */
+@media (max-width: 768px) {
+  body .form-container {
+    animation: containerFadeInMobile 0.6s ease-out !important;
+    -webkit-animation: containerFadeInMobile 0.6s ease-out !important;
+  }
+  
+  @keyframes containerFadeInMobile {
+    0% {
+      opacity: 0 !important;
+      transform: translateY(20px) !important;
+    }
+    100% {
+      opacity: 1 !important;
+      transform: translateY(0) !important;
+    }
+  }
+  
+  @-webkit-keyframes containerFadeInMobile {
+    0% {
+      opacity: 0 !important;
+      -webkit-transform: translateY(20px) !important;
+    }
+    100% {
+      opacity: 1 !important;
+      -webkit-transform: translateY(0) !important;
+    }
+  }
+}
+
+/* Debug styles - remove in production */
+body .form-container::before {
+  content: "Animation should be working!" !important;
+  position: absolute !important;
+  top: -30px !important;
+  left: 0 !important;
+  background: #FF3A5E !important;
+  color: white !important;
+  padding: 5px 10px !important;
+  border-radius: 4px !important;
+  font-size: 12px !important;
+  z-index: 9999 !important;
+} 

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animation Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f8f9fa;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .test-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Form container animations */
+        .form-container {
+            animation: containerFadeIn 0.8s ease-out;
+            margin-bottom: 20px;
+            padding: 20px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+
+        @keyframes containerFadeIn {
+            0% {
+                opacity: 0;
+                transform: translateY(30px) scale(0.95);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        /* Toggle container animation */
+        .toggle-container {
+            animation: toggleSlideIn 0.5s ease-out 0.2s both;
+            margin-bottom: 20px;
+        }
+
+        @keyframes toggleSlideIn {
+            0% {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Logo/brand animation */
+        .brand-section {
+            animation: brandFadeIn 0.6s ease-out 0.1s both;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        @keyframes brandFadeIn {
+            0% {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Button hover animations */
+        .btn-hover-animate {
+            transition: all 0.2s ease;
+            background-color: #FF3A5E;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .btn-hover-animate:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(255, 58, 94, 0.2);
+            background-color: #e62a4d;
+        }
+
+        /* Input focus animations */
+        .input-focus-animate {
+            transition: all 0.2s ease;
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .input-focus-animate:focus {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(255, 58, 94, 0.1);
+            border-color: #FF3A5E;
+            outline: none;
+        }
+
+        /* Toggle button styles */
+        .toggle-btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            margin: 0 5px;
+        }
+
+        .toggle-btn.active {
+            background-color: white;
+            color: #111827;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+
+        .toggle-btn:not(.active) {
+            background-color: transparent;
+            color: #6B7280;
+        }
+
+        .toggle-btn:not(.active):hover {
+            color: #111827;
+        }
+
+        .toggle-buttons {
+            background-color: #f3f4f6;
+            padding: 4px;
+            border-radius: 8px;
+            display: inline-flex;
+        }
+
+        /* Test results */
+        .test-result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+
+        .test-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #34d399;
+        }
+
+        .test-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #f87171;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>Animation Test</h1>
+        
+        <div class="brand-section">
+            <h2>Welcome Back</h2>
+            <p>This is a test of the animations</p>
+        </div>
+
+        <div class="toggle-container">
+            <div class="toggle-buttons">
+                <button class="toggle-btn active">Sign In</button>
+                <button class="toggle-btn">Create Account</button>
+            </div>
+        </div>
+
+        <div class="form-container">
+            <h3>Test Form</h3>
+            <input type="text" class="input-focus-animate" placeholder="Test input field">
+            <button class="btn-hover-animate">Test Button</button>
+        </div>
+
+        <div id="test-results"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const results = document.getElementById('test-results');
+            
+            // Test if animations are supported
+            const animationSupported = 'animation' in document.body.style || 
+                                     'WebkitAnimation' in document.body.style ||
+                                     'MozAnimation' in document.body.style ||
+                                     'OAnimation' in document.body.style;
+            
+            // Test if transforms are supported
+            const transformSupported = 'transform' in document.body.style ||
+                                     'WebkitTransform' in document.body.style ||
+                                     'MozTransform' in document.body.style ||
+                                     'OTransform' in document.body.style;
+            
+            let resultHTML = '<h3>Test Results:</h3>';
+            
+            if (animationSupported) {
+                resultHTML += '<div class="test-result test-success">✓ CSS Animations are supported</div>';
+            } else {
+                resultHTML += '<div class="test-result test-error">✗ CSS Animations are NOT supported</div>';
+            }
+            
+            if (transformSupported) {
+                resultHTML += '<div class="test-result test-success">✓ CSS Transforms are supported</div>';
+            } else {
+                resultHTML += '<div class="test-result test-error">✗ CSS Transforms are NOT supported</div>';
+            }
+            
+            // Test if animations are actually running
+            setTimeout(() => {
+                const brandSection = document.querySelector('.brand-section');
+                const computedStyle = window.getComputedStyle(brandSection);
+                
+                if (computedStyle.opacity === '1' && computedStyle.transform !== 'none') {
+                    resultHTML += '<div class="test-result test-success">✓ Animations are running correctly</div>';
+                } else {
+                    resultHTML += '<div class="test-result test-error">✗ Animations may not be running</div>';
+                }
+                
+                results.innerHTML = resultHTML;
+            }, 1000);
+            
+            // Toggle button functionality
+            const toggleButtons = document.querySelectorAll('.toggle-btn');
+            toggleButtons.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    toggleButtons.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                });
+            });
+        });
+    </script>
+</body>
+</html> 

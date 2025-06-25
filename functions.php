@@ -790,7 +790,7 @@ function hype_pups_acf_fields() {
 add_action('acf/init', 'hype_pups_acf_fields');
 
 // // Save shipping address to user meta when Step 1 is completed
-// add_action('wp_ajax_hype_pups_save_checkout_step', function() {
+// add_action('wp_ajax_hype_pups_save_`checkout`_step', function() {
 //     $step = isset($_POST['step']) ? sanitize_text_field($_POST['step']) : '';
 //     $fields = isset($_POST['fields']) ? $_POST['fields'] : array();
 //     if (!is_array($fields)) {
@@ -2549,3 +2549,785 @@ function hype_pups_ensure_shipping_calculation() {
     }
     WC()->cart->calculate_totals();
 }    
+
+
+add_action('admin_post_submit_product_review', 'handle_product_review_submission');
+add_action('admin_post_nopriv_submit_product_review', 'handle_product_review_submission');
+
+function handle_product_review_submission() {
+    // Verify nonce
+    if (!wp_verify_nonce($_POST['review_nonce'], 'submit_review')) {
+        wp_die('Security check failed');
+    }
+    
+    // Check if user is logged in
+    if (!is_user_logged_in()) {
+        wp_redirect(wp_login_url(get_permalink($_POST['product_id'])));
+        exit;
+    }
+    
+    $product_id = intval($_POST['product_id']);
+    $rating = intval($_POST['rating']);
+    $review_title = sanitize_text_field($_POST['review_title']);
+    $review_content = sanitize_textarea_field($_POST['review_content']);
+    $user_id = get_current_user_id();
+    $user_info = get_userdata($user_id);
+    
+    // Validate required fields
+    if (empty($rating) || empty($review_title) || empty($review_content)) {
+        wp_redirect(add_query_arg('review_error', 'missing_fields', get_permalink($product_id)));
+        exit;
+    }
+    
+    // Check if user already reviewed this product
+    $existing_review = get_comments(array(
+        'post_id' => $product_id,
+        'user_id' => $user_id,
+        'count' => true
+    ));
+    
+    if ($existing_review > 0) {
+        wp_redirect(add_query_arg('review_error', 'already_reviewed', get_permalink($product_id)));
+        exit;
+    }
+    
+    // Create the review
+    $comment_data = array(
+        'comment_post_ID' => $product_id,
+        'comment_author' => $user_info->display_name,
+        'comment_author_email' => $user_info->user_email,
+        'comment_author_url' => $user_info->user_url,
+        'comment_content' => $review_content,
+        'comment_type' => 'review',
+        'comment_approved' => 1, // Auto-approve or set to 0 for moderation
+        'user_id' => $user_id,
+    );
+    
+    $comment_id = wp_insert_comment($comment_data);
+    
+    if ($comment_id) {
+        // Add rating and title as comment meta
+        add_comment_meta($comment_id, 'rating', $rating);
+        add_comment_meta($comment_id, 'review_title', $review_title);
+        
+        // Redirect with success message
+        wp_redirect(add_query_arg('review_success', '1', get_permalink($product_id)));
+    } else {
+        // Redirect with error message
+        wp_redirect(add_query_arg('review_error', 'submission_failed', get_permalink($product_id)));
+    }
+    
+    exit;
+}
+
+// Display success/error messages
+add_action('wp_head', 'display_review_messages');
+
+function display_review_messages() {
+    if (isset($_GET['review_success'])) {
+        echo '<script>
+            jQuery(document).ready(function($) {
+                $("body").prepend("<div class=\"review-message success bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4\" role=\"alert\">Your review has been submitted successfully!</div>");
+                setTimeout(function() {
+                    $(".review-message").fadeOut();
+                }, 5000);
+            });
+        </script>';
+    }
+    
+    if (isset($_GET['review_error'])) {
+        $error = $_GET['review_error'];
+        $message = '';
+        
+        switch ($error) {
+            case 'missing_fields':
+                $message = 'Please fill in all required fields.';
+                break;
+            case 'already_reviewed':
+                $message = 'You have already reviewed this product.';
+                break;
+            case 'submission_failed':
+                $message = 'Failed to submit review. Please try again.';
+                break;
+            default:
+                $message = 'An error occurred. Please try again.';
+        }
+        
+        echo '<script>
+            jQuery(document).ready(function($) {
+                $("body").prepend("<div class=\"review-message error bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4\" role=\"alert\">" + "' . $message . '" + "</div>");
+                setTimeout(function() {
+                    $(".review-message").fadeOut();
+                }, 5000);
+            });
+        </script>';
+    }
+}
+
+// Enqueue jQuery if not already loaded
+add_action('wp_enqueue_scripts', 'enqueue_review_scripts');
+
+function enqueue_review_scripts() {
+    if (!wp_script_is('jquery', 'enqueued')) {
+        wp_enqueue_script('jquery');
+    }
+}
+
+// Add custom comment type for reviews
+add_filter('comment_form_default_fields', 'modify_comment_form_fields');
+
+function modify_comment_form_fields($fields) {
+    // This ensures our custom review type works with WordPress comments system
+    return $fields;
+}
+
+// Optional: Add review schema markup for SEO
+add_action('wp_footer', 'add_review_schema_markup');
+
+function add_review_schema_markup() {
+    if (is_singular('product')) { // Adjust post type as needed
+        global $post;
+        
+        $reviews = get_comments(array(
+            'post_id' => $post->ID,
+            'status' => 'approve',
+            'type' => 'review'
+        ));
+        
+        if (!empty($reviews)) {
+            $total_rating = 0;
+            $review_count = count($reviews);
+            
+            foreach ($reviews as $review) {
+                $rating = get_comment_meta($review->comment_ID, 'rating', true);
+                $total_rating += intval($rating);
+            }
+            
+            $average_rating = round($total_rating / $review_count, 1);
+            
+            $schema = array(
+                "@context" => "https://schema.org/",
+                "@type" => "Product",
+                "name" => get_the_title(),
+                "aggregateRating" => array(
+                    "@type" => "AggregateRating",
+                    "ratingValue" => $average_rating,
+                    "reviewCount" => $review_count
+                )
+            );
+            
+            echo '<script type="application/ld+json">' . json_encode($schema) . '</script>';
+        }
+    }
+}
+
+
+// Enqueue scripts and styles for quick view
+function quickview_enqueue_scripts() {
+    if (is_woocommerce() || is_cart() || is_shop() || is_product_category() || is_product_tag() || is_product() || is_page()) {
+        wp_enqueue_script('jquery');
+        
+        // Enqueue WooCommerce scripts for variations
+        wp_enqueue_script('wc-add-to-cart-variation');
+        wp_enqueue_script('wc-single-product');
+        
+        wp_localize_script('jquery', 'quickview_ajax', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('quickview_nonce'),
+            'loading_text' => __('Loading...', 'textdomain'),
+            'error_text' => __('Error loading product', 'textdomain'),
+            'cart_url' => wc_get_cart_url()
+        ));
+    }
+}
+add_action('wp_enqueue_scripts', 'quickview_enqueue_scripts');
+
+/**
+ * Get properly formatted product attributes for quick view
+ */
+function quickview_get_product_attributes($product) {
+    $attributes = array();
+    
+    if ($product->is_type('variable')) {
+        // For variable products, get variation attributes
+        $variation_attributes = $product->get_variation_attributes();
+        
+        foreach ($variation_attributes as $attribute_name => $attribute_values) {
+            $clean_name = str_replace('attribute_', '', $attribute_name);
+            
+            if (taxonomy_exists($clean_name)) {
+                $attribute_label = wc_attribute_label($clean_name);
+                $terms = get_terms(array(
+                    'taxonomy' => $clean_name,
+                    'slug' => $attribute_values,
+                    'hide_empty' => false,
+                ));
+                
+                if (!empty($terms) && !is_wp_error($terms)) {
+                    $options = array();
+                    foreach ($terms as $term) {
+                        $options[] = array(
+                            'name' => $term->name,
+                            'slug' => $term->slug,
+                            'id' => $term->term_id
+                        );
+                    }
+                    
+                    $attributes[$clean_name] = array(
+                        'label' => $attribute_label,
+                        'options' => $options,
+                        'is_taxonomy' => true,
+                        'is_variation' => true,
+                        'attribute_name' => $attribute_name
+                    );
+                }
+        } else {
+                // Custom attribute
+                $options = array();
+                foreach ($attribute_values as $value) {
+                    if (!empty($value)) {
+                        $options[] = array(
+                            'name' => ucfirst($value),
+                            'slug' => sanitize_title($value),
+                            'id' => sanitize_title($value)
+                        );
+                    }
+                }
+                
+                if (!empty($options)) {
+                    $clean_label = ucwords(str_replace(array('-', '_'), ' ', $clean_name));
+                    $attributes[$clean_name] = array(
+                        'label' => $clean_label,
+                        'options' => $options,
+                        'is_taxonomy' => false,
+                        'is_variation' => true,
+                        'attribute_name' => $attribute_name
+                    );
+                }
+            }
+        }
+        } else {
+        // For simple products, get display attributes
+        $product_attributes = $product->get_attributes();
+        
+        foreach ($product_attributes as $attribute_name => $attribute_data) {
+            if (!$attribute_data->get_variation()) {
+                $attribute_label = wc_attribute_label($attribute_name);
+                
+                if ($attribute_data->is_taxonomy()) {
+                    $terms = wp_get_post_terms($product->get_id(), $attribute_data->get_taxonomy());
+                    
+                    if (!empty($terms) && !is_wp_error($terms)) {
+                        $options = array();
+                        foreach ($terms as $term) {
+                            $options[] = array(
+                                'name' => $term->name,
+                                'slug' => $term->slug,
+                                'id' => $term->term_id
+                            );
+                        }
+                        
+                        $attributes[$attribute_name] = array(
+                            'label' => $attribute_label,
+                            'options' => $options,
+                            'is_taxonomy' => true,
+                            'is_variation' => false
+                        );
+                    }
+                } else {
+                    $attribute_values = $attribute_data->get_options();
+                    
+                    if (!empty($attribute_values)) {
+                        $options = array();
+                        foreach ($attribute_values as $value) {
+                            $value = trim($value);
+                            if (!empty($value)) {
+                                $options[] = array(
+                                    'name' => $value,
+                                    'slug' => sanitize_title($value),
+                                    'id' => sanitize_title($value)
+                                );
+                            }
+                        }
+                        
+                        if (!empty($options)) {
+                            $attributes[$attribute_name] = array(
+                                'label' => $attribute_label,
+                                'options' => $options,
+                                'is_taxonomy' => false,
+                                'is_variation' => false
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return $attributes;
+}
+
+/**
+ * Get product gallery images
+ */
+function quickview_get_product_gallery($product) {
+    $gallery_images = array();
+    
+    // Get main product image
+    $main_image_id = $product->get_image_id();
+    if ($main_image_id) {
+        $gallery_images[] = array(
+            'id' => $main_image_id,
+            'thumbnail' => wp_get_attachment_image_url($main_image_id, 'woocommerce_gallery_thumbnail'),
+            'full' => wp_get_attachment_image_url($main_image_id, 'woocommerce_single'),
+            'alt' => get_post_meta($main_image_id, '_wp_attachment_image_alt', true) ?: $product->get_name()
+        );
+    }
+    
+    // Get gallery images
+    $gallery_ids = $product->get_gallery_image_ids();
+    foreach ($gallery_ids as $gallery_id) {
+        $gallery_images[] = array(
+            'id' => $gallery_id,
+            'thumbnail' => wp_get_attachment_image_url($gallery_id, 'woocommerce_gallery_thumbnail'),
+            'full' => wp_get_attachment_image_url($gallery_id, 'woocommerce_single'),
+            'alt' => get_post_meta($gallery_id, '_wp_attachment_image_alt', true) ?: $product->get_name()
+        );
+    }
+    
+    // If no images, add placeholder
+    if (empty($gallery_images)) {
+        $placeholder = wc_placeholder_img_src('woocommerce_single');
+        $gallery_images[] = array(
+            'id' => 0,
+            'thumbnail' => $placeholder,
+            'full' => $placeholder,
+            'alt' => $product->get_name()
+        );
+    }
+    
+    return $gallery_images;
+}
+
+/**
+ * Get variation data for variable products
+ */
+function quickview_get_variation_data($product) {
+    $variations_data = array();
+    
+    if ($product->is_type('variable')) {
+        $available_variations = $product->get_available_variations();
+        
+        foreach ($available_variations as $variation) {
+            $variation_obj = wc_get_product($variation['variation_id']);
+            
+            if ($variation_obj && $variation_obj->exists()) {
+                $variation_image_id = $variation_obj->get_image_id();
+                $variation_image = '';
+                
+                if ($variation_image_id) {
+                    $variation_image = wp_get_attachment_image_url($variation_image_id, 'woocommerce_single');
+                }
+                
+                $variations_data[$variation['variation_id']] = array(
+                    'price_html' => $variation_obj->get_price_html(),
+                    'display_price' => wc_get_price_to_display($variation_obj),
+                    'display_regular_price' => wc_get_price_to_display($variation_obj, array('price' => $variation_obj->get_regular_price())),
+                    'image' => $variation_image,
+                    'attributes' => $variation['attributes'],
+                    'is_in_stock' => $variation_obj->is_in_stock(),
+                    'stock_quantity' => $variation_obj->get_stock_quantity(),
+                    'variation_is_active' => $variation['variation_is_active'],
+                    'availability_html' => wc_get_stock_html($variation_obj)
+                );
+            }
+        }
+    }
+    
+    return $variations_data;
+}
+
+/**
+ * AJAX handler for quick view
+ */
+function quickview_get_product_data() {
+    // Check nonce for security
+    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'quickview_nonce')) {
+        wp_send_json_error(array('message' => 'Security check failed'));
+        return;
+    }
+    
+    $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+    
+    if (!$product_id) {
+        wp_send_json_error(array('message' => 'Invalid product ID'));
+        return;
+    }
+    
+    $product = wc_get_product($product_id);
+    
+    if (!$product || !$product->exists()) {
+        wp_send_json_error(array('message' => 'Product not found'));
+        return;
+    }
+    
+    try {
+        // Get product categories
+        $categories = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'names'));
+        $category = !empty($categories) ? implode(', ', array_slice($categories, 0, 2)) : __('Uncategorized', 'textdomain');
+        
+        // Get product attributes
+        $attributes = quickview_get_product_attributes($product);
+        
+        // Get gallery images
+        $gallery = quickview_get_product_gallery($product);
+        
+        // Get variation data
+        $variations = quickview_get_variation_data($product);
+        
+        // Get reviews data
+        $review_count = $product->get_review_count();
+        $average_rating = $product->get_average_rating();
+        
+        // Get stock status
+        $stock_status = $product->get_stock_status();
+        $stock_text = __('In Stock', 'textdomain');
+        
+        switch ($stock_status) {
+            case 'outofstock':
+                $stock_text = __('Out of Stock', 'textdomain');
+                break;
+            case 'onbackorder':
+                $stock_text = __('On Backorder', 'textdomain');
+                break;
+            case 'instock':
+            default:
+                $stock_text = __('In Stock', 'textdomain');
+                break;
+        }
+        
+        // Get description
+        $description = $product->get_short_description();
+        if (empty($description)) {
+            $description = wp_trim_words($product->get_description(), 30, '...');
+        }
+        
+        // Check if product is bestseller (you can customize this logic)
+        $is_bestseller = get_post_meta($product_id, '_is_bestseller', true) || $product->is_featured();
+        
+        // Prepare response data
+        $response_data = array(
+            'id' => $product_id,
+            'title' => $product->get_name(),
+            'price' => $product->get_price_html(),
+            'description' => wp_strip_all_tags($description),
+            'image' => !empty($gallery) ? $gallery[0]['full'] : '',
+            'gallery' => $gallery,
+            'category' => $category,
+            'rating' => floatval($average_rating),
+            'review_count' => intval($review_count),
+            'attributes' => $attributes,
+            'variations' => $variations,
+            'in_stock' => $product->is_in_stock(),
+            'stock_status' => $stock_text,
+            'type' => $product->get_type(),
+            'permalink' => $product->get_permalink(),
+            'add_to_cart_text' => $product->add_to_cart_text(),
+            'is_purchasable' => $product->is_purchasable(),
+            'is_bestseller' => $is_bestseller,
+            'min_qty' => 1,
+            'max_qty' => $product->get_max_purchase_quantity()
+        );
+        
+        wp_send_json_success($response_data);
+        
+    } catch (Exception $e) {
+        wp_send_json_error(array('message' => 'Error loading product: ' . $e->getMessage()));
+    }
+}
+
+// Hook AJAX actions
+add_action('wp_ajax_get_quick_view_product', 'quickview_get_product_data');
+add_action('wp_ajax_nopriv_get_quick_view_product', 'quickview_get_product_data');
+
+/**
+ * AJAX handler for adding product to cart from quick view
+ */
+function quickview_add_to_cart() {
+    // Debug logging
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('QuickView Add to Cart - POST data: ' . print_r($_POST, true));
+    }
+    
+    // Check nonce
+    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'quickview_nonce')) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('QuickView Add to Cart - Nonce verification failed');
+        }
+        wp_send_json_error(array('message' => 'Security check failed'));
+        return;
+    }
+    
+    $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+    $quantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
+    $variation_id = isset($_POST['variation_id']) ? intval($_POST['variation_id']) : 0;
+    $variation_data = isset($_POST['variation']) ? $_POST['variation'] : array();
+    
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('QuickView Add to Cart - Processed data: Product ID: ' . $product_id . ', Quantity: ' . $quantity . ', Variation ID: ' . $variation_id . ', Variation Data: ' . print_r($variation_data, true));
+    }
+    
+    if (!$product_id) {
+        wp_send_json_error(array('message' => 'Invalid product ID'));
+        return;
+    }
+    
+    try {
+        // Clean variation data
+        $cleaned_variation = array();
+        if (!empty($variation_data)) {
+            foreach ($variation_data as $key => $value) {
+                if (!empty($value)) {
+                    $cleaned_variation[sanitize_text_field($key)] = sanitize_text_field($value);
+                }
+            }
+        }
+        
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('QuickView Add to Cart - Cleaned variation data: ' . print_r($cleaned_variation, true));
+        }
+        
+        // Add to cart
+        if ($variation_id && !empty($cleaned_variation)) {
+            $added = WC()->cart->add_to_cart($product_id, $quantity, $variation_id, $cleaned_variation);
+        } else {
+            $added = WC()->cart->add_to_cart($product_id, $quantity);
+        }
+        
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('QuickView Add to Cart - Add to cart result: ' . ($added ? 'success' : 'failed'));
+        }
+        
+        if ($added) {
+            // Get updated cart data
+            $cart_count = WC()->cart->get_cart_contents_count();
+            $cart_total = WC()->cart->get_cart_total();
+            
+            wp_send_json_success(array(
+                'message' => __('Product added to cart successfully!', 'textdomain'),
+                'cart_count' => $cart_count,
+                'cart_total' => $cart_total,
+                'cart_url' => wc_get_cart_url(),
+                'cart_hash' => WC()->cart->get_cart_hash()
+            ));
+        } else {
+            wp_send_json_error(array('message' => __('Failed to add product to cart', 'textdomain')));
+        }
+        
+    } catch (Exception $e) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('QuickView Add to Cart - Exception: ' . $e->getMessage());
+        }
+        wp_send_json_error(array('message' => 'Error: ' . $e->getMessage()));
+    }
+}
+
+// Hook AJAX actions for add to cart
+add_action('wp_ajax_quickview_add_to_cart', 'quickview_add_to_cart');
+add_action('wp_ajax_nopriv_quickview_add_to_cart', 'quickview_add_to_cart');
+
+/**
+ * Add quick view button to product loops
+ */
+function quickview_add_button($product_id = null) {
+    if (!$product_id) {
+        global $product;
+        $product_id = $product->get_id();
+    }
+    
+    echo '<a href="#" class="quickview-btn flex items-center bg-white text-gray-800 font-medium rounded-lg px-4 py-2 shadow hover:bg-gray-100 text-base gap-2" data-product-id="' . esc_attr($product_id) . '">';
+    echo '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" class="w-5 h-5">';
+    echo '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />';
+    echo '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />';
+    echo '</svg>';
+    echo __('Quick View', 'textdomain');
+    echo '</a>';
+}
+
+/**
+ * Add the popup HTML to footer
+ */
+function quickview_add_popup_html() {
+    if (is_woocommerce() || is_cart() || is_shop() || is_product_category() || is_product_tag() || is_product()) {
+        ?>
+        <!-- Quick View Popup HTML will be added here -->
+        <?php
+    }
+}
+add_action('wp_footer', 'quickview_add_popup_html');
+
+
+// Custom User Registration AJAX Handler
+add_action('wp_ajax_nopriv_custom_user_registration', 'handle_custom_user_registration');
+add_action('wp_ajax_custom_user_registration', 'handle_custom_user_registration');
+
+function handle_custom_user_registration() {
+    // Debug: Log the incoming request
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('Registration Debug: POST data received: ' . print_r($_POST, true));
+    }
+
+    // Verify nonce for security
+    if (!wp_verify_nonce($_POST['_wpnonce'], 'custom_user_registration')) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Registration Debug: Nonce verification failed');
+        }
+        wp_send_json_error('Security check failed');
+    }
+
+    // Get form data
+    $first_name = sanitize_text_field($_POST['first_name']);
+    $last_name = sanitize_text_field($_POST['last_name']);
+    $email = sanitize_email($_POST['user_email']);
+    $username = sanitize_user($_POST['user_login']);
+    $password = $_POST['user_pass'];
+    $confirm_password = $_POST['user_pass_confirm'];
+    $terms_agreement = isset($_POST['terms_agreement']) ? true : false;
+
+    // Debug: Log the processed data
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('Registration Debug: Processed data - First: ' . $first_name . ', Last: ' . $last_name . ', Email: ' . $email . ', Username: ' . $username . ', Terms: ' . ($terms_agreement ? 'yes' : 'no'));
+    }
+
+    // Validation
+    $errors = array();
+
+    // Check if terms are agreed
+    if (!$terms_agreement) {
+        $errors[] = 'You must agree to the Terms of Service and Privacy Policy';
+    }
+
+    // Check if passwords match
+    if ($password !== $confirm_password) {
+        $errors[] = 'Passwords do not match';
+    }
+
+    // Check password strength
+    if (strlen($password) < 6) {
+        $errors[] = 'Password must be at least 6 characters long';
+    }
+
+    // Check if username exists
+    if (username_exists($username)) {
+        $errors[] = 'Username already exists';
+    }
+
+    // Check if email exists
+    if (email_exists($email)) {
+        $errors[] = 'Email address already exists';
+    }
+
+    // Validate email format
+    if (!is_email($email)) {
+        $errors[] = 'Invalid email address';
+    }
+
+    // If there are errors, return them
+    if (!empty($errors)) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Registration Debug: Validation errors: ' . implode(', ', $errors));
+        }
+        wp_send_json_error(implode(', ', $errors));
+    }
+
+    // Create user
+    $user_data = array(
+        'user_login' => $username,
+        'user_email' => $email,
+        'user_pass' => $password,
+        'first_name' => $first_name,
+        'last_name' => $last_name,
+        'display_name' => $first_name . ' ' . $last_name,
+        'role' => 'customer'
+    );
+
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('Registration Debug: Attempting to create user with data: ' . print_r($user_data, true));
+    }
+
+    $user_id = wp_insert_user($user_data);
+
+    if (is_wp_error($user_id)) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('Registration Debug: User creation failed: ' . $user_id->get_error_message());
+        }
+        wp_send_json_error($user_id->get_error_message());
+    }
+
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('Registration Debug: User created successfully with ID: ' . $user_id);
+    }
+
+    // Auto-login the user
+    wp_set_current_user($user_id);
+    wp_set_auth_cookie($user_id);
+
+    // Send success response
+    wp_send_json_success(array(
+        'message' => 'Account created successfully!',
+        'user_id' => $user_id,
+        'redirect_url' => get_permalink()
+    ));
+}
+
+// Add nonce to registration form
+function add_registration_nonce() {
+    if (!is_user_logged_in()) {
+        wp_nonce_field('custom_user_registration', '_wpnonce');
+    }
+}
+add_action('wp_footer', 'add_registration_nonce');
+
+// Enable user registration if not already enabled
+function enable_user_registration() {
+    if (!get_option('users_can_register')) {
+        update_option('users_can_register', 1);
+    }
+}
+add_action('init', 'enable_user_registration');
+
+// YITH WooCommerce Wishlist Integration
+function hype_pups_yith_wishlist_setup() {
+    // Remove default YITH positioning
+    if (function_exists('YITH_WCWL')) {
+        remove_action('woocommerce_single_product_summary', array(YITH_WCWL_Frontend(), 'print_button'), 31);
+        remove_action('woocommerce_after_shop_loop_item', array(YITH_WCWL_Frontend(), 'print_button'), 15);
+    }
+}
+add_action('init', 'hype_pups_yith_wishlist_setup');
+
+// Ensure YITH wishlist scripts are loaded on shop pages
+function hype_pups_enqueue_yith_wishlist_scripts() {
+    // Check if YITH plugin is active
+    if (function_exists('YITH_WCWL') || function_exists('yith_wcwl_add_to_wishlist')) {
+        if (is_shop() || is_product_category() || is_product()) {
+            // Ensure YITH wishlist scripts are loaded
+            if (function_exists('YITH_WCWL_Frontend')) {
+                YITH_WCWL_Frontend()->enqueue_styles_and_stuffs();
+            }
+            
+            // Add custom script to ensure YITH is properly initialized
+            wp_enqueue_script('hype-pups-yith-wishlist', get_template_directory_uri() . '/assets/js/yith-wishlist-init.js', array('jquery'), '1.0', true);
+            
+            // Pass YITH status to JavaScript
+            wp_localize_script('hype-pups-yith-wishlist', 'hypePupsYith', array(
+                'yith_active' => function_exists('YITH_WCWL'),
+                'yith_frontend_active' => function_exists('YITH_WCWL_Frontend'),
+                'ajax_url' => admin_url('admin-ajax.php')
+            ));
+        }
+    }
+}
+add_action('wp_enqueue_scripts', 'hype_pups_enqueue_yith_wishlist_scripts');
+    
+
