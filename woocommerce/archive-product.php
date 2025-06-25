@@ -17,227 +17,6 @@ if (!function_exists('sanitize_text_field')) {
     require_once ABSPATH . 'wp-includes/formatting.php';
 }
 
-function robust_product_filtering($query) {
-    // Only run on the main query on frontend
-    
-    // Only run on WooCommerce pages
-    if (!is_woocommerce() && !is_shop() && !is_product_category() && !is_product_tag()) {
-        return;
-    }
-    global $wp_query;
-    $query = $wp_query;
-    // Skip if it's not a product query
-    if (!isset($query->query_vars['post_type']) || $query->query_vars['post_type'] !== 'product') {
-        return;
-    }
-    
-    // If no filters are set, don't modify the query
-    if (empty($_GET['product_cat']) && empty($_GET['filter_pa_color']) && 
-        empty($_GET['filter_pa_size']) && empty($_GET['min_price']) && empty($_GET['max_price'])) {
-        return;
-    }
-    
-    global $wpdb;
-    
-    // Get existing queries or initialize
-    $meta_query = $query->get('meta_query') ?: [];
-    $tax_query = $query->get('tax_query') ?: [];
-    
-    // Ensure proper relation is set
-    if (!isset($meta_query['relation'])) {
-        $meta_query['relation'] = 'AND';
-    }
-    if (!isset($tax_query['relation'])) {
-        $tax_query['relation'] = 'AND';
-    }
-    
-    // Handle Product Categories
-    if (!empty($_GET['product_cat']) && (is_shop() || is_product_category())) {
-        $categories = is_array($_GET['product_cat']) ? $_GET['product_cat'] : explode(',', $_GET['product_cat']);
-        $categories = array_map('sanitize_title', array_filter($categories));
-        
-        if (!empty($categories)) {
-            $tax_query[] = [
-                'taxonomy' => 'product_cat',
-                'field'    => 'slug',
-                'terms'    => $categories,
-                'operator' => 'IN',
-            ];
-        }
-    }
-    
-    // Handle Attribute Filters (Color & Size)
-    $color_filter = !empty($_GET['filter_pa_color']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_color']))) : [];
-    $size_filter = !empty($_GET['filter_pa_size']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_size']))) : [];
-    
-    if (!empty($color_filter) || !empty($size_filter)) {
-        $attribute_queries = [];
-        $all_params = [];
-        
-        // Build individual attribute queries
-        if (!empty($color_filter)) {
-            $color_placeholders = implode(',', array_fill(0, count($color_filter), '%s'));
-            $attribute_queries[] = "
-                SELECT DISTINCT pv.post_parent as product_id
-                FROM {$wpdb->posts} pv
-                INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
-                INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
-                WHERE pv.post_type = 'product_variation'
-                AND pv.post_status = 'publish'
-                AND pp.post_type = 'product'
-                AND pp.post_status = 'publish'
-                AND pm.meta_key = 'attribute_color'
-                AND pm.meta_value IN ($color_placeholders)
-                AND pv.post_parent > 0
-            ";
-            $all_params = array_merge($all_params, $color_filter);
-        }
-        
-        if (!empty($size_filter)) {
-            $size_placeholders = implode(',', array_fill(0, count($size_filter), '%s'));
-            $attribute_queries[] = "
-                SELECT DISTINCT pv.post_parent as product_id
-                FROM {$wpdb->posts} pv
-                INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
-                INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
-                WHERE pv.post_type = 'product_variation'
-                AND pv.post_status = 'publish'
-                AND pp.post_type = 'product'
-                AND pp.post_status = 'publish'
-                AND pm.meta_key = 'attribute_size'
-                AND pm.meta_value IN ($size_placeholders)
-                AND pv.post_parent > 0
-            ";
-            $all_params = array_merge($all_params, $size_filter);
-        }
-        
-        // If both filters are applied, we need products that match BOTH attributes
-        if (!empty($color_filter) && !empty($size_filter)) {
-            $sql = "
-                SELECT product_id
-                FROM (
-                    (" . $attribute_queries[0] . ")
-                    INTERSECT
-                    (" . $attribute_queries[1] . ")
-                ) as matched_products
-            ";
-        } else {
-            // If only one filter is applied
-            $sql = "
-                SELECT DISTINCT product_id
-                FROM (
-                    " . implode(' UNION ', $attribute_queries) . "
-                ) as matched_products
-            ";
-        }
-        
-        $matched_ids = $wpdb->get_col($wpdb->prepare($sql, $all_params));
-        
-        // Log errors for debugging
-        if ($wpdb->last_error) {
-            error_log('Product Filter SQL Error: ' . $wpdb->last_error);
-            error_log('SQL Query: ' . $wpdb->last_query);
-        }
-        
-        // Set post__in to filter products
-        if (!empty($matched_ids)) {
-            $existing_post_in = $query->get('post__in');
-            if (!empty($existing_post_in)) {
-                // Intersect with existing filters
-                $matched_ids = array_intersect($existing_post_in, $matched_ids);
-            }
-            $query->set('post__in', !empty($matched_ids) ? array_map('intval', $matched_ids) : [0]);
-        } else {
-            // No matches found
-            $query->set('post__in', [0]);
-        }
-    }
-    
-    // Handle Price Filters - Check if they're not already added
-    $has_min_price = false;
-    $has_max_price = false;
-    
-    // Check existing meta queries to avoid duplicates
-    foreach ($meta_query as $meta_q) {
-        if (isset($meta_q['key']) && $meta_q['key'] === '_price') {
-            if (isset($meta_q['compare']) && $meta_q['compare'] === '>=') {
-                $has_min_price = true;
-            }
-            if (isset($meta_q['compare']) && $meta_q['compare'] === '<=') {
-                $has_max_price = true;
-            }
-        }
-    }
-    
-    // Add min price filter if not already present
-    if (!empty($_GET['min_price']) && is_numeric($_GET['min_price']) && !$has_min_price) {
-        $meta_query[] = [
-            'key'     => '_price',
-            'value'   => floatval($_GET['min_price']),
-            'compare' => '>=',
-            'type'    => 'NUMERIC',
-        ];
-    }
-    
-    // Add max price filter if not already present
-    if (!empty($_GET['max_price']) && is_numeric($_GET['max_price']) && !$has_max_price) {
-        $meta_query[] = [
-            'key'     => '_price',
-            'value'   => floatval($_GET['max_price']),
-            'compare' => '<=',
-            'type'    => 'NUMERIC',
-        ];
-    }
-    
-    // Apply meta and tax queries only if they have actual filters
-    if (count($meta_query) > 1 || (count($meta_query) == 1 && !isset($meta_query['relation']))) {
-        $query->set('meta_query', $meta_query);
-    }
-
-    if (count($tax_query) > 1 || (count($tax_query) == 1 && !isset($tax_query['relation']))) {
-        $query->set('tax_query', $tax_query);
-    }
-    
-    // Ensure we're only getting published products
-    $query->set('post_status', 'publish');
-    
-    // Handle Sorting
-    if (!empty($_GET['orderby'])) {
-        $orderby = sanitize_text_field($_GET['orderby']);
-        switch ($orderby) {
-            case 'price':
-                $query->set('meta_key', '_price');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'ASC');
-                break;
-            case 'price-desc':
-                $query->set('meta_key', '_price');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
-                break;
-            case 'popularity':
-                $query->set('meta_key', 'total_sales');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
-                break;
-            case 'rating':
-                $query->set('meta_key', '_wc_average_rating');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
-                break;
-            case 'date':
-                $query->set('orderby', 'date');
-                $query->set('order', 'DESC');
-                break;
-            default:
-                // Handle default WooCommerce sorting
-                break;
-        }
-    }
-}
-
-// Hook with high priority to ensure it runs early
-// add_action('pre_get_posts', 'robust_product_filtering', 20);
 
 get_header();
 ?>
@@ -365,7 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <?php
                         $current_url_params = $_GET;
                         foreach ($current_url_params as $key => $value) {
-                            if (!in_array($key, array('product_cat', 'min_price', 'max_price', 'filter_pa_size', 'filter_pa_color'))) {
+                            if (!in_array($key, array('category', 'min_price', 'max_price', 'filter_pa_size', 'filter_pa_color'))) {
                                 if (is_array($value)) {
                                     foreach ($value as $v) {
                                         echo '<input type="hidden" name="' . esc_attr($key) . '[]" value="' . esc_attr($v) . '">';
@@ -379,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Add current category as hidden input if on category page
                         if (is_product_category()) {
                             $current_category = get_queried_object();
-                            echo '<input type="hidden" name="product_cat" value="' . esc_attr($current_category->slug) . '">';
+                            echo '<input type="hidden" name="category" value="' . esc_attr($current_category->slug) . '">';
                         }
                         ?>
                         
@@ -400,13 +179,20 @@ document.addEventListener('DOMContentLoaded', function() {
                                     'parent' => 0
                                 ));
                                 $selected_cats = array();
-                                if (isset($_GET['product_cat'])) {
-                                    if (is_array($_GET['product_cat'])) {
-                                        $selected_cats = array_map('sanitize_text_field', $_GET['product_cat']);
+                                if (isset($_GET['category'])) {
+                                    if (is_array($_GET['category'])) {
+                                        $selected_cats = array_map('sanitize_text_field', $_GET['category']);
                                     } else {
-                                        $selected_cats = explode(',', sanitize_text_field($_GET['product_cat']));
+                                        $selected_cats = explode(',', sanitize_text_field($_GET['category']));
                                     }
                                 }
+                                
+                                // If we're on a category page and no categories are selected, pre-select the current category
+                                if (is_product_category() && empty($selected_cats)) {
+                                    $current_category = get_queried_object();
+                                    $selected_cats[] = $current_category->slug;
+                                }
+                                
                                 $cat_count = count($product_categories);
                                 ?>
                                 <div class="space-y-2 <?php if ($cat_count > 5) echo 'overflow-y-auto'; ?>" style="<?php if ($cat_count > 5) echo 'max-height: 200px;'; ?>">
@@ -417,7 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                             <input 
                                                 type="checkbox" 
                                                 id="category-<?php echo esc_attr($category->slug); ?>" 
-                                                name="product_cat[]"
+                                                name="category[]"
                                                 value="<?php echo esc_attr($category->slug); ?>"
                                                 class="rounded border-gray-300 text-[#ed1c24] focus:ring-[#ed1c24]"
                                                 <?php checked(in_array($category->slug, $selected_cats)); ?>
@@ -747,20 +533,191 @@ document.addEventListener('DOMContentLoaded', function() {
                     </form>
                 </div>
             </div>
-
+<?php
+  $paged = (get_query_var('paged')) ? get_query_var('paged') : 1;
+                    
+  // Build query arguments
+  $args = array(
+      'post_type' => 'product',
+      'post_status' => 'publish',
+      'posts_per_page' => 12, // Adjust as needed
+      'paged' => $paged,
+      'meta_query' => array(),
+      'tax_query' => array(),
+  );
+  
+  // Handle Product Categories
+  if (!empty($_GET['category'])) {
+      $categories = is_array($_GET['category']) ? $_GET['category'] : explode(',', $_GET['category']);
+      $categories = array_map('sanitize_title', array_filter($categories));
+      
+      if (!empty($categories)) {
+          $args['tax_query'][] = array(
+              'taxonomy' => 'product_cat',
+              'field'    => 'slug',
+              'terms'    => $categories,
+              'operator' => 'IN',
+          );
+      }
+  }
+  
+  // Handle Price Filters
+  if (!empty($_GET['min_price']) && is_numeric($_GET['min_price'])) {
+      $args['meta_query'][] = array(
+          'key'     => '_price',
+          'value'   => floatval($_GET['min_price']),
+          'compare' => '>=',
+          'type'    => 'NUMERIC',
+      );
+  }
+  
+  if (!empty($_GET['max_price']) && is_numeric($_GET['max_price'])) {
+      $args['meta_query'][] = array(
+          'key'     => '_price',
+          'value'   => floatval($_GET['max_price']),
+          'compare' => '<=',
+          'type'    => 'NUMERIC',
+      );
+  }
+  
+  // Handle Attribute Filters (Color & Size)
+  if (!empty($_GET['filter_pa_color']) || !empty($_GET['filter_pa_size'])) {
+      global $wpdb;
+      
+      $color_filter = !empty($_GET['filter_pa_color']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_color']))) : [];
+      $size_filter = !empty($_GET['filter_pa_size']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_size']))) : [];
+      
+      if (!empty($color_filter) || !empty($size_filter)) {
+          $attribute_queries = [];
+          $all_params = [];
+          
+          // Build individual attribute queries
+          if (!empty($color_filter)) {
+              $color_placeholders = implode(',', array_fill(0, count($color_filter), '%s'));
+              $attribute_queries[] = "
+                  SELECT DISTINCT pv.post_parent as product_id
+                  FROM {$wpdb->posts} pv
+                  INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
+                  INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
+                  WHERE pv.post_type = 'product_variation'
+                  AND pv.post_status = 'publish'
+                  AND pp.post_type = 'product'
+                  AND pp.post_status = 'publish'
+                  AND pm.meta_key = 'attribute_color'
+                  AND pm.meta_value IN ($color_placeholders)
+                  AND pv.post_parent > 0
+              ";
+              $all_params = array_merge($all_params, $color_filter);
+          }
+          
+          if (!empty($size_filter)) {
+              $size_placeholders = implode(',', array_fill(0, count($size_filter), '%s'));
+              $attribute_queries[] = "
+                  SELECT DISTINCT pv.post_parent as product_id
+                  FROM {$wpdb->posts} pv
+                  INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
+                  INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
+                  WHERE pv.post_type = 'product_variation'
+                  AND pv.post_status = 'publish'
+                  AND pp.post_type = 'product'
+                  AND pp.post_status = 'publish'
+                  AND pm.meta_key = 'attribute_size'
+                  AND pm.meta_value IN ($size_placeholders)
+                  AND pv.post_parent > 0
+              ";
+              $all_params = array_merge($all_params, $size_filter);
+          }
+          
+          // If both filters are applied, we need products that match BOTH attributes
+          if (!empty($color_filter) && !empty($size_filter)) {
+              $sql = "
+                  SELECT product_id
+                  FROM (
+                      (" . $attribute_queries[0] . ")
+                      INTERSECT
+                      (" . $attribute_queries[1] . ")
+                  ) as matched_products
+              ";
+          } else {
+              // If only one filter is applied
+              $sql = "
+                  SELECT DISTINCT product_id
+                  FROM (
+                      " . implode(' UNION ', $attribute_queries) . "
+                  ) as matched_products
+              ";
+          }
+          
+          $matched_ids = $wpdb->get_col($wpdb->prepare($sql, $all_params));
+          
+          if (!empty($matched_ids)) {
+              $args['post__in'] = array_map('intval', $matched_ids);
+          } else {
+              // No matches found
+              $args['post__in'] = array(0);
+          }
+      }
+  }
+  
+  // Handle Sorting
+  if (!empty($_GET['orderby'])) {
+      $orderby = sanitize_text_field($_GET['orderby']);
+      switch ($orderby) {
+          case 'price':
+              $args['meta_key'] = '_price';
+              $args['orderby'] = 'meta_value_num';
+              $args['order'] = 'ASC';
+              break;
+          case 'price-desc':
+              $args['meta_key'] = '_price';
+              $args['orderby'] = 'meta_value_num';
+              $args['order'] = 'DESC';
+              break;
+          case 'popularity':
+              $args['meta_key'] = 'total_sales';
+              $args['orderby'] = 'meta_value_num';
+              $args['order'] = 'DESC';
+              break;
+          case 'rating':
+              $args['meta_key'] = '_wc_average_rating';
+              $args['orderby'] = 'meta_value_num';
+              $args['order'] = 'DESC';
+              break;
+          case 'date':
+              $args['orderby'] = 'date';
+              $args['order'] = 'DESC';
+              break;
+          default:
+              // Handle default WooCommerce sorting
+              break;
+      }
+  }
+  
+  // Set proper relations for meta and tax queries
+  if (count($args['meta_query']) > 1) {
+      $args['meta_query']['relation'] = 'AND';
+  }
+  if (count($args['tax_query']) > 1) {
+      $args['tax_query']['relation'] = 'AND';
+  }
+  
+  // Remove empty arrays
+  if (empty($args['meta_query'])) {
+      unset($args['meta_query']);
+  }
+  if (empty($args['tax_query'])) {
+      unset($args['tax_query']);
+  }
+  
+  // Execute custom query
+  $products_query = new WP_Query($args);
+?>
             <!-- Products - Right Side -->
             <div class="lg:w-3/4">
                 <!-- Sort and View Options -->
                 <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
                     <p class="text-sm text-gray-500">
-                        <?php
-                        global $wp_query;
-                        $found_posts = $wp_query->found_posts ?? 0;
-                        echo esc_html($found_posts) . ' products xxxxxxxxx';
-                        echo '<pre>';
-                        var_dump($wp_query);
-                        echo '</pre>';
-                        ?>
+                    <?php echo esc_html($products_query->found_posts) . ' products'; ?>
                     </p>
                     <div class="flex items-center gap-4">
                         <form class="woocommerce-ordering" method="get">
@@ -786,11 +743,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 <!-- Products Grid -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
                     <?php
-                    if (have_posts()) :
-                        while (have_posts()) : the_post();
+                    // Custom query for products with filtering
+                    if ($products_query->have_posts()) :
+                        while ($products_query->have_posts()) : $products_query->the_post();
                             global $product;
                             // Check if $product is valid before proceeding
-                            // var_dump($product);
                             if (!$product || !is_object($product) || !method_exists($product, 'get_id')) {
                                 continue; // Skip this iteration if product is invalid
                             }
@@ -927,6 +884,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             </div>
                     <?php
                         endwhile;
+                        
+                        // Reset post data
+                        wp_reset_postdata();
+                        
                     else :
                     ?>
                         <div class="col-span-full text-center py-12">
@@ -943,10 +904,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
 
                 <!-- Pagination -->
-                <?php if (have_posts()) : ?>
+                <?php if ($products_query->have_posts()) : ?>
                 <div class="flex justify-center mt-12">
                     <?php
+                    // Custom pagination for our custom query
+                    $big = 999999999;
                     echo paginate_links(array(
+                        'base' => str_replace($big, '%#%', esc_url(get_pagenum_link($big))),
+                        'format' => '?paged=%#%',
+                        'current' => max(1, get_query_var('paged')),
+                        'total' => $products_query->max_num_pages,
                         'prev_text' => '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>',
                         'next_text' => '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>',
                         'type' => 'list',
@@ -989,7 +956,7 @@ function submitFilters() {
     const sizes = [];
     const colors = [];
     for (let [key, value] of formData.entries()) {
-        if (key === 'product_cat[]') {
+        if (key === 'category[]') {
             categories.push(value);
         } else if (key === 'filter_pa_size') {
             sizes.push(value);
@@ -1002,7 +969,7 @@ function submitFilters() {
     
     // Add categories as a single string parameter
     if (categories.length > 0) {
-        params.append('product_cat', categories.join(','));
+        params.append('category', categories.join(','));
     }
     
     // Add sizes as a single comma-separated string
@@ -1015,11 +982,30 @@ function submitFilters() {
         params.append('filter_pa_color', colors.join(','));
     }
     
-    // Get current URL without query parameters
-    const baseUrl = window.location.href.split('?')[0];
+    // Get current URL and preserve the base path
+    let currentUrl = window.location.href;
+    let baseUrl;
     
-    // Redirect to new URL with filters
-    window.location.href = `${baseUrl}?${params.toString()}`;
+    // Check if we're on a category page or shop page
+    if (currentUrl.includes('/product-category/')) {
+        // We're on a category page, keep the category URL structure
+        baseUrl = currentUrl.split('?')[0];
+    } else if (currentUrl.includes('/shop/') || currentUrl.includes('/shop')) {
+        // We're on the shop page
+        baseUrl = currentUrl.split('?')[0];
+    } else {
+        // Fallback to shop page
+        baseUrl = window.location.origin + '/shop/';
+    }
+    
+    // Remove paged parameter if it exists (reset to page 1 when filtering)
+    params.delete('paged');
+    
+    // Build the new URL
+    const newUrl = params.toString() ? `${baseUrl}?${params.toString()}` : baseUrl;
+    
+    // Navigate to the new URL
+    window.location.href = newUrl;
 }
 
 // Update price display in real-time
