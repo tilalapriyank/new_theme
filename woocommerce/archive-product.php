@@ -17,160 +17,126 @@ if (!function_exists('sanitize_text_field')) {
     require_once ABSPATH . 'wp-includes/formatting.php';
 }
 
-function robust_product_filtering($query) {
-    // Only run on the main query on frontend
-    
-    // Only run on WooCommerce pages
-    if (!is_woocommerce() && !is_shop() && !is_product_category() && !is_product_tag()) {
-        return;
-    }
-    global $wp_query;
-    $query = $wp_query;
-    // Skip if it's not a product query
-    if (!isset($query->query_vars['post_type']) || $query->query_vars['post_type'] !== 'product') {
+add_action('pre_get_posts', function ($query) {
+// 	var_dump($query->get('post_type'));
+    if (is_admin()) {
         return;
     }
     
-    // If no filters are set, don't modify the query
-    if (empty($_GET['product_cat']) && empty($_GET['filter_pa_color']) && 
-        empty($_GET['filter_pa_size']) && empty($_GET['min_price']) && empty($_GET['max_price'])) {
-        return;
-    }
+    // Only target queries that will display products
+    $is_product_display = false;
     
-    global $wpdb;
-    
-    // Get existing queries or initialize
-    $meta_query = $query->get('meta_query') ?: [];
-    $tax_query = $query->get('tax_query') ?: [];
-    
-    // Ensure proper relation is set
-    if (!isset($meta_query['relation'])) {
-        $meta_query['relation'] = 'AND';
-    }
-    if (!isset($tax_query['relation'])) {
-        $tax_query['relation'] = 'AND';
-    }
-    
-    // Handle Product Categories
-    if (!empty($_GET['product_cat']) && (is_shop() || is_product_category())) {
-        $categories = is_array($_GET['product_cat']) ? $_GET['product_cat'] : explode(',', $_GET['product_cat']);
-        $categories = array_map('sanitize_title', array_filter($categories));
-        
-        if (!empty($categories)) {
-            $tax_query[] = [
-                'taxonomy' => 'product_cat',
-                'field'    => 'slug',
-                'terms'    => $categories,
-                'operator' => 'IN',
-            ];
+    // Check if this looks like the main product display query
+    if (is_shop() || is_product_category()) {
+        if (!$query->get('post_type') || $query->get('post_type') === 'product') {
+            $is_product_display = true;
         }
     }
     
-    // Handle Attribute Filters (Color & Size)
-    $color_filter = !empty($_GET['filter_pa_color']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_color']))) : [];
-    $size_filter = !empty($_GET['filter_pa_size']) ? array_map('sanitize_text_field', array_filter(explode(',', $_GET['filter_pa_size']))) : [];
+    // Also check if it's explicitly a product query with no other post type set
+    if ($query->get('post_type') === 'product') {
+        $is_product_display = true;
+    }
     
+    // Skip obvious non-product queries
+    $skip_post_types = ['elementor_snippet', 'elementor_library', 'elementor_font', 'nav_menu_item', 'revision'];
+    if (in_array($query->get('post_type'), $skip_post_types)) {
+        return;
+    }
+    
+    if (!$is_product_display) {
+        return;
+    }
+    
+    // Check if we have filter parameters
+    $has_filters = !empty($_GET['min_price']) || !empty($_GET['max_price']) || 
+                   !empty($_GET['filter_pa_size']) || !empty($_GET['filter_pa_color']) || 
+                   !empty($_GET['product_cat']);
+    
+    if (!$has_filters) {
+        return;
+    }
+
+    global $wpdb;
+
+    echo '<pre style="background:#98FB98;padding:10px;border:2px solid green;">';
+    echo "=== MAIN PRODUCT QUERY FILTERED ===\n";
+    echo "Post Type: " . ($query->get('post_type') ?: 'default') . "\n";
+    echo "Is Main Query: " . ($query->is_main_query() ? 'yes' : 'no') . "\n";
+    
+    // Ensure this is definitely a product query
+    $query->set('post_type', 'product');
+    $query->set('post_status', 'publish');
+
+    // Apply all your existing filter logic...
+    $tax_query = $query->get('tax_query') ?: [];
+
+    if (!empty($_GET['product_cat'])) {
+        $categories = is_array($_GET['product_cat']) ? $_GET['product_cat'] : explode(',', $_GET['product_cat']);
+        $categories = array_map('sanitize_title', $categories);
+        $tax_query[] = [
+            'taxonomy' => 'product_cat',
+            'field'    => 'slug',
+            'terms'    => $categories,
+            'operator' => 'IN'
+        ];
+    }
+
+    $color_filter = !empty($_GET['filter_pa_color']) ? array_map('sanitize_text_field', explode(',', $_GET['filter_pa_color'])) : [];
+    $size_filter  = !empty($_GET['filter_pa_size']) ? array_map('sanitize_text_field', explode(',', $_GET['filter_pa_size'])) : [];
+
     if (!empty($color_filter) || !empty($size_filter)) {
-        $attribute_queries = [];
-        $all_params = [];
-        
-        // Build individual attribute queries
+        $attribute_conditions = [];
+        $params = [];
+
         if (!empty($color_filter)) {
             $color_placeholders = implode(',', array_fill(0, count($color_filter), '%s'));
-            $attribute_queries[] = "
-                SELECT DISTINCT pv.post_parent as product_id
-                FROM {$wpdb->posts} pv
-                INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
-                INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
-                WHERE pv.post_type = 'product_variation'
-                AND pv.post_status = 'publish'
-                AND pp.post_type = 'product'
-                AND pp.post_status = 'publish'
-                AND pm.meta_key = 'attribute_color'
-                AND pm.meta_value IN ($color_placeholders)
-                AND pv.post_parent > 0
-            ";
-            $all_params = array_merge($all_params, $color_filter);
+            $attribute_conditions[] = "(meta_key = 'attribute_pa_color' AND meta_value IN ($color_placeholders))";
+            $params = array_merge($params, $color_filter);
         }
-        
+
         if (!empty($size_filter)) {
             $size_placeholders = implode(',', array_fill(0, count($size_filter), '%s'));
-            $attribute_queries[] = "
-                SELECT DISTINCT pv.post_parent as product_id
-                FROM {$wpdb->posts} pv
-                INNER JOIN {$wpdb->postmeta} pm ON pv.ID = pm.post_id
-                INNER JOIN {$wpdb->posts} pp ON pv.post_parent = pp.ID
-                WHERE pv.post_type = 'product_variation'
-                AND pv.post_status = 'publish'
-                AND pp.post_type = 'product'
-                AND pp.post_status = 'publish'
-                AND pm.meta_key = 'attribute_size'
-                AND pm.meta_value IN ($size_placeholders)
-                AND pv.post_parent > 0
-            ";
-            $all_params = array_merge($all_params, $size_filter);
+            $attribute_conditions[] = "(meta_key = 'attribute_pa_size' AND meta_value IN ($size_placeholders))";
+            $params = array_merge($params, $size_filter);
         }
-        
-        // If both filters are applied, we need products that match BOTH attributes
-        if (!empty($color_filter) && !empty($size_filter)) {
-            $sql = "
-                SELECT product_id
-                FROM (
-                    (" . $attribute_queries[0] . ")
-                    INTERSECT
-                    (" . $attribute_queries[1] . ")
-                ) as matched_products
-            ";
-        } else {
-            // If only one filter is applied
-            $sql = "
-                SELECT DISTINCT product_id
-                FROM (
-                    " . implode(' UNION ', $attribute_queries) . "
-                ) as matched_products
-            ";
-        }
-        
-        $matched_ids = $wpdb->get_col($wpdb->prepare($sql, $all_params));
-        
-        // Log errors for debugging
-        if ($wpdb->last_error) {
-            error_log('Product Filter SQL Error: ' . $wpdb->last_error);
-            error_log('SQL Query: ' . $wpdb->last_query);
-        }
-        
-        // Set post__in to filter products
+
+        $where_clause = implode(' OR ', $attribute_conditions);
+        $required_matches = count(array_filter([$color_filter, $size_filter]));
+
+        $sql = "
+            SELECT post_parent, COUNT(DISTINCT meta_key) as matches
+            FROM {$wpdb->postmeta} pm
+            INNER JOIN {$wpdb->posts} pv ON pm.post_id = pv.ID
+            WHERE pv.post_type = 'product_variation'
+            AND pv.post_status = 'publish'
+            AND ($where_clause)
+            GROUP BY post_parent
+            HAVING matches = %d
+        ";
+
+        $params[] = $required_matches;
+        $prepared_sql = $wpdb->prepare($sql, ...$params);
+        $matched_ids = $wpdb->get_col($prepared_sql);
+
+        echo "Attribute Filter - Matched IDs: ";
+//         var_dump($matched_ids);
+
         if (!empty($matched_ids)) {
-            $existing_post_in = $query->get('post__in');
-            if (!empty($existing_post_in)) {
-                // Intersect with existing filters
-                $matched_ids = array_intersect($existing_post_in, $matched_ids);
-            }
-            $query->set('post__in', !empty($matched_ids) ? array_map('intval', $matched_ids) : [0]);
+            $query->set('post__in', $matched_ids);
         } else {
-            // No matches found
             $query->set('post__in', [0]);
         }
     }
-    
-    // Handle Price Filters - Check if they're not already added
-    $has_min_price = false;
-    $has_max_price = false;
-    
-    // Check existing meta queries to avoid duplicates
-    foreach ($meta_query as $meta_q) {
-        if (isset($meta_q['key']) && $meta_q['key'] === '_price') {
-            if (isset($meta_q['compare']) && $meta_q['compare'] === '>=') {
-                $has_min_price = true;
-            }
-            if (isset($meta_q['compare']) && $meta_q['compare'] === '<=') {
-                $has_max_price = true;
-            }
-        }
+
+    if (!empty($tax_query)) {
+        $tax_query['relation'] = 'AND';
+        $query->set('tax_query', $tax_query);
     }
-    
-    // Add min price filter if not already present
-    if (!empty($_GET['min_price']) && is_numeric($_GET['min_price']) && !$has_min_price) {
+
+    $meta_query = $query->get('meta_query') ?: [];
+
+    if (!empty($_GET['min_price'])) {
         $meta_query[] = [
             'key'     => '_price',
             'value'   => floatval($_GET['min_price']),
@@ -178,9 +144,8 @@ function robust_product_filtering($query) {
             'type'    => 'NUMERIC',
         ];
     }
-    
-    // Add max price filter if not already present
-    if (!empty($_GET['max_price']) && is_numeric($_GET['max_price']) && !$has_max_price) {
+
+    if (!empty($_GET['max_price'])) {
         $meta_query[] = [
             'key'     => '_price',
             'value'   => floatval($_GET['max_price']),
@@ -188,56 +153,44 @@ function robust_product_filtering($query) {
             'type'    => 'NUMERIC',
         ];
     }
-    
-    // Apply meta and tax queries only if they have actual filters
-    if (count($meta_query) > 1 || (count($meta_query) == 1 && !isset($meta_query['relation']))) {
+
+    if (!empty($meta_query)) {
+        $meta_query['relation'] = 'AND';
         $query->set('meta_query', $meta_query);
     }
 
-    if (count($tax_query) > 1 || (count($tax_query) == 1 && !isset($tax_query['relation']))) {
-        $query->set('tax_query', $tax_query);
-    }
-    
-    // Ensure we're only getting published products
-    $query->set('post_status', 'publish');
-    
-    // Handle Sorting
     if (!empty($_GET['orderby'])) {
         $orderby = sanitize_text_field($_GET['orderby']);
         switch ($orderby) {
             case 'price':
-                $query->set('meta_key', '_price');
                 $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'ASC');
+                $query->set('meta_key', '_price');
+                $query->set('order', 'asc');
                 break;
             case 'price-desc':
+                $query->set('orderby', 'meta_value_num');
                 $query->set('meta_key', '_price');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
-                break;
-            case 'popularity':
-                $query->set('meta_key', 'total_sales');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
-                break;
-            case 'rating':
-                $query->set('meta_key', '_wc_average_rating');
-                $query->set('orderby', 'meta_value_num');
-                $query->set('order', 'DESC');
+                $query->set('order', 'desc');
                 break;
             case 'date':
                 $query->set('orderby', 'date');
-                $query->set('order', 'DESC');
+                $query->set('order', 'desc');
                 break;
-            default:
-                // Handle default WooCommerce sorting
+            case 'popularity':
+                $query->set('orderby', 'meta_value_num');
+                $query->set('meta_key', 'total_sales');
+                $query->set('order', 'desc');
+                break;
+            case 'rating':
+                $query->set('orderby', 'meta_value_num');
+                $query->set('meta_key', '_wc_average_rating');
+                $query->set('order', 'desc');
                 break;
         }
     }
-}
 
-// Hook with high priority to ensure it runs early
-// add_action('pre_get_posts', 'robust_product_filtering', 20);
+    echo "=== MAIN PRODUCT QUERY COMPLETE ===</pre>";
+}, 999);
 
 get_header();
 ?>
@@ -291,8 +244,8 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
-<main id="main-content" class="py-12 md:pt-32 md:pb-16" x-data="shopFilters">
-    <div class="container mx-auto md:px-32">
+<main id="main-content" class="py-12 pt-32 md:pb-16 " x-data="shopFilters">
+    <div class="container mx-auto md:px-34 px-4">
         <!-- Page Header -->
         <div class="mb-8">
             <?php if (is_product_category()) : ?>
@@ -385,9 +338,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         <div class="mb-6">
                             <h3 class="font-bold mb-4 flex items-center">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+<!--                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                                </svg>
+                                </svg> -->
+								<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sliders-horizontal h-4 w-4 mr-2"><line x1="21" x2="14" y1="4" y2="4"></line><line x1="10" x2="3" y1="4" y2="4"></line><line x1="21" x2="12" y1="12" y2="12"></line><line x1="8" x2="3" y1="12" y2="12"></line><line x1="21" x2="16" y1="20" y2="20"></line><line x1="12" x2="3" y1="20" y2="20"></line><line x1="14" x2="14" y1="2" y2="6"></line><line x1="8" x2="8" y1="10" y2="14"></line><line x1="16" x2="16" y1="18" y2="22"></line></svg>
                                 Filter Products
                             </h3>
                             <?php if (!is_product_category()) : ?>
@@ -699,9 +653,17 @@ document.addEventListener('DOMContentLoaded', function() {
                                     if (!empty($all_colors)) :
                                         foreach ($all_colors as $slug => $color_data) :
                                             $color_class = '';
-                                            $color_class = strtolower($slug);
-                                        
-                                            
+                                            switch (strtolower($slug)) {
+                                                case 'black': $color_class = 'bg-black'; break;
+                                                case 'white': $color_class = 'bg-white border border-gray-300'; break;
+                                                case 'red': $color_class = 'bg-red-500'; break;
+                                                case 'blue': $color_class = 'bg-blue-500'; break;
+                                                case 'green': $color_class = 'bg-green-500'; break;
+                                                case 'yellow': $color_class = 'bg-yellow-400'; break;
+                                                case 'gray': $color_class = 'bg-gray-500'; break;
+                                                case 'camo': $color_class = 'bg-olive-600'; break;
+                                                default: $color_class = 'bg-gray-200'; break;
+                                            }
                                     ?>
                                             <label
                                                 class="color-option <?php if (in_array($slug, $selected_colors)) echo ' selected'; ?>"
@@ -716,7 +678,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     onchange="submitFilters()"
                                                 >
                                                 <div class="flex flex-col items-center gap-1">
-                                                    <div style="background-color: <?php echo esc_attr($color_class); ?>;" class="w-8 h-8 rounded-full hover:ring-2 hover:ring-[#ed1c24] hover:ring-offset-2 <?php if (in_array($slug, $selected_colors)) echo 'ring-2 ring-[#ed1c24]'; ?>"></div>
+                                                    <div class="w-8 h-8 rounded-full <?php echo esc_attr($color_class); ?> hover:ring-2 hover:ring-[#ed1c24] hover:ring-offset-2 <?php if (in_array($slug, $selected_colors)) echo 'ring-2 ring-[#ed1c24]'; ?>"></div>
                                                     <span class="text-xs font-medium <?php if (in_array($slug, $selected_colors)) echo 'text-[#ed1c24]'; ?>"><?php echo esc_html($color_data['name']); ?></span>
                                                 </div>
                                             </label>
@@ -756,10 +718,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <?php
                         global $wp_query;
                         $found_posts = $wp_query->found_posts ?? 0;
-                        echo esc_html($found_posts) . ' products xxxxxxxxx';
-                        echo '<pre>';
-                        var_dump($wp_query);
-                        echo '</pre>';
+                        echo esc_html($found_posts) . ' products';
                         ?>
                     </p>
                     <div class="flex items-center gap-4">
@@ -784,16 +743,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
 
                 <!-- Products Grid -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                <div class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-8">
                     <?php
                     if (have_posts()) :
                         while (have_posts()) : the_post();
                             global $product;
-                            // Check if $product is valid before proceeding
-                            // var_dump($product);
-                            if (!$product || !is_object($product) || !method_exists($product, 'get_id')) {
-                                continue; // Skip this iteration if product is invalid
-                            }
                             $product_id = $product->get_id();
                             $product_link = get_permalink($product_id);
                             $product_img = get_the_post_thumbnail_url($product_id, 'woocommerce_thumbnail');
@@ -805,126 +759,155 @@ document.addEventListener('DOMContentLoaded', function() {
                             $badge_class = '';
                             if ($product->is_on_sale()) {
                                 $badge_label = 'SALE';
-                                $badge_class = 'sale';
+                                $badge_class = 'bg-[#ed1c24]';
                             } elseif ((time() - strtotime($product->get_date_created())) < (30 * 24 * 60 * 60)) {
                                 $badge_label = 'NEW';
-                                $badge_class = 'new';
+                                $badge_class = 'bg-blue-500';
                             } elseif ($product->get_attribute('pa_limited') || $product->get_attribute('limited')) {
                                 $badge_label = 'LIMITED';
-                                $badge_class = 'limited';
+                                $badge_class = 'bg-purple-500';
                             }
                     ?>
-                            <div class="rounded-lg overflow-hidden border-none shadow-md group bg-white relative transition-all duration-200 hover:shadow-lg">
-                                <!-- Badge -->
-                                <?php if ($badge_label) : ?>
-                                    <span class="product-badge <?php echo esc_attr($badge_class); ?>">
-                                        <?php echo esc_html($badge_label); ?>
-                                    </span>
-                                <?php endif; ?>
-                                <!-- Wishlist Icon -->
-                                <div class="absolute top-4 right-4 z-20">
-                                    <?php if (function_exists('YITH_WCWL') || function_exists('yith_wcwl_add_to_wishlist')) : ?>
-                                        <?php echo do_shortcode('[yith_wcwl_add_to_wishlist product_id="' . esc_attr($product_id) . '" label="" browse_wishlist_text="" already_in_wishlist_text="" product_added_text="" show_count="no"]'); ?>
-                                    <?php else : ?>
-                                        <button
-                                            class="wishlist-fallback bg-white shadow-lg rounded-full p-2 flex items-center justify-center transition hover:bg-gray-100"
-                                            onclick="event.preventDefault(); showWishlistMessage();"
-                                            aria-label="Add to wishlist"
-                                            style="box-shadow:0 2px 8px rgba(0,0,0,0.10);"
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                                            </svg>
-                                        </button>
-                                    <?php endif; ?>
-                                </div>
-                                <!-- Card as Link (everything except overlay and wishlist) -->
-                                <a href="<?php echo esc_url($product_link); ?>" class="block group/card focus:outline-none" tabindex="0" style="text-decoration:none;">
+                            <a href="<?php echo esc_url($product_link); ?>" class="block group">
+                                <div class="rounded-lg border text-card-foreground bg-white border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 group">
                                     <div class="relative">
-                                        <div class="aspect-square relative overflow-hidden bg-gray-100 flex items-center justify-center">
+                                        <div class="aspect-square relative overflow-hidden">
                                             <?php if ($product_img) : ?>
                                                 <img 
                                                     src="<?php echo esc_url($product_img); ?>" 
                                                     alt="<?php echo esc_attr($product_title); ?>" 
-                                                    class="object-cover w-full h-full transition-transform duration-500 group-hover/card:scale-105"
+                                                    loading="lazy" 
+                                                    decoding="async" 
+                                                    class="object-cover group-hover:scale-105 transition-transform duration-500"
+                                                    style="position: absolute; height: 100%; width: 100%; inset: 0px; color: transparent;"
                                                 >
                                             <?php else : ?>
-                                                <div class="w-full h-full bg-gray-200 flex items-center justify-center">
+                                                <div class="w-full h-full bg-gray-200 flex items-center justify-center" style="position: absolute; height: 100%; width: 100%; inset: 0px;">
                                                     <span class="text-gray-400">No Image</span>
                                                 </div>
                                             <?php endif; ?>
                                         </div>
-                                        <!-- Overlay Actions -->
-                                        <div class="absolute inset-0 flex flex-col items-center pb-4 justify-end bg-black/60 opacity-0 group-hover/card:opacity-100 transition-opacity z-10">
-                                            <a href="#"
-                                                    class="flex items-center w-56 mb-4 justify-center bg-white text-gray-800 font-medium rounded-lg px-4 py-2 shadow hover:bg-gray-100 text-base gap-2 quick-view-btn"
-                                                    data-product-id="<?php echo esc_attr($product_id); ?>"
-                                                    data-product-url="<?php echo esc_url($product_link); ?>">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" class="w-5 h-5">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                                    </svg>
-                                                    Quick View
-                                                </a>
-                                            <?php if ($product->get_type() === 'variable') : ?>
-                                                <a
-                                                    href="<?php echo esc_url($product_link); ?>"
-                                                    class="bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white w-56 py-2 px-4 rounded-lg text-base font-medium flex items-center justify-center shadow"
-                                                    style="box-shadow:0 2px 8px rgba(0,0,0,0.10);"
-                                                >
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart h-4 w-4 mr-2" __v0_r="0,5832,5846"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg>
-                                                    Select Options
-                                                </a>
+                                        <!-- Badge -->
+                                        <?php if ($badge_label) : ?>
+                                            <div class="inline-flex items-center rounded-full border font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent hover:bg-primary/80 absolute top-3 left-3 <?php echo esc_attr($badge_class); ?> text-white text-xs px-2 py-1 z-10">
+                                                <?php echo esc_html($badge_label); ?>
+                                            </div>
+                                        <?php endif; ?>
+                                        
+                                        <!-- Wishlist Icon -->
+                                        <div class="absolute top-3 right-3 z-20">
+                                            <?php if (function_exists('YITH_WCWL') || function_exists('yith_wcwl_add_to_wishlist')) : ?>
+                                                <?php echo do_shortcode('[yith_wcwl_add_to_wishlist product_id="' . esc_attr($product_id) . '" label="" browse_wishlist_text="" already_in_wishlist_text="" product_added_text="" show_count="no"]'); ?>
                                             <?php else : ?>
                                                 <button
-                                                    type="button"
-                                                    class="ajax-add-to-cart bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white w-56 py-2 px-4 rounded-lg text-base font-medium flex items-center justify-center shadow"
-                                                    data-product_id="<?php echo esc_attr($product_id); ?>"
-                                                    data-product_sku="<?php echo esc_attr($product->get_sku()); ?>"
-                                                    data-quantity="1"
+                                                    class="wishlist-fallback bg-white shadow-lg rounded-full p-2 flex items-center justify-center transition hover:bg-gray-100"
+                                                    onclick="event.preventDefault(); showWishlistMessage();"
+                                                    aria-label="Add to wishlist"
                                                     style="box-shadow:0 2px 8px rgba(0,0,0,0.10);"
                                                 >
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart h-4 w-4 mr-2" __v0_r="0,5832,5846"><circle cx="8" cy="21" r="1"></circle><circle cx="19" cy="21" r="1"></circle><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path></svg>
-                                                    <span class="add-to-cart-text">Add to Cart</span>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                                    </svg>
                                                 </button>
                                             <?php endif; ?>
                                         </div>
+                                        
+                                        <!-- Overlay Actions -->
+                                        <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                            <div class="absolute bottom-4 left-4 right-4 flex flex-col gap-3">
+                                                <button 
+                                                    class="gap-2 whitespace-nowrap rounded-md text-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 border px-4 py-2 w-full bg-white/95 border-white text-gray-900 hover:bg-white hover:text-black font-medium h-11 backdrop-blur-sm flex items-center justify-center quick-view-btn"
+                                                    data-product-id="<?php echo esc_attr($product_id); ?>"
+                                                    data-product-url="<?php echo esc_url($product_link); ?>"
+                                                    onclick="event.preventDefault();"
+                                                    aria-label="Quick view product"
+                                                >
+                                                    <span class="flex items-center">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye h-4 w-4 mr-2">
+                                                            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                                                            <circle cx="12" cy="12" r="3"></circle>
+                                                        </svg>
+                                                        Quick View
+                                                    </span>
+                                                </button>
+                                                
+                                                <?php if ($product->get_type() === 'variable') : ?>
+                                                    <button
+                                                        type="button"
+                                                        class="gap-2 whitespace-nowrap rounded-md text-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 px-4 py-2 w-full bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white font-medium h-11 shadow-lg flex items-center justify-center"
+                                                        onclick="event.preventDefault(); window.location.href='<?php echo esc_url($product_link); ?>';"
+                                                        aria-label="Select options"
+                                                    >
+                                                        <span class="flex items-center">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart h-4 w-4 mr-2">
+                                                                <circle cx="8" cy="21" r="1"></circle>
+                                                                <circle cx="19" cy="21" r="1"></circle>
+                                                                <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path>
+                                                            </svg>
+                                                            Select Options
+                                                        </span>
+                                                    </button>
+                                                <?php else : ?>
+                                                    <button
+                                                        type="button"
+                                                        class="ajax-add-to-cart gap-2 whitespace-nowrap rounded-md text-sm ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 px-4 py-2 w-full bg-[#ed1c24] hover:bg-[#ed1c24]/90 text-white font-medium h-11 shadow-lg flex items-center justify-center"
+                                                        data-product_id="<?php echo esc_attr($product_id); ?>"
+                                                        data-product_sku="<?php echo esc_attr($product->get_sku()); ?>"
+                                                        data-quantity="1"
+                                                        onclick="event.preventDefault();"
+                                                        aria-label="Add to cart"
+                                                    >
+                                                        <span class="flex items-center">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart h-4 w-4 mr-2">
+                                                                <circle cx="8" cy="21" r="1"></circle>
+                                                                <circle cx="19" cy="21" r="1"></circle>
+                                                                <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"></path>
+                                                            </svg>
+                                                            <span class="add-to-cart-text">Add to Cart</span>
+                                                        </span>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div class="p-6 pt-4">
-                                        <div class="mb-2">
-                                            <span class="block text-base font-bold font-montserrat <?php echo $product->is_on_sale() ? 'text-[#ed1c24]' : 'text-gray-800'; ?>" style="line-height:1.2;">
+                                    
+                                    <div class="p-4">
+                                        <div class="space-y-2">
+                                            <h3 class="font-semibold text-gray-900 group-hover:text-[#ed1c24] transition-colors line-clamp-2 leading-tight">
                                                 <?php echo esc_html($product_title); ?>
-                                            </span>
-                                        </div>
-                                        <div class="flex items-center gap-1 mb-2">
-                                            <?php
-                                            for ($i = 1; $i <= 5; $i++) {
-                                                if ($i <= round($average)) {
-                                                    echo '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 fill-[#FFD100] text-[#FFD100]" viewBox="0 0 20 20" fill="currentColor"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>';
-                                                } else {
-                                                    echo '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-300" viewBox="0 0 20 20" fill="currentColor"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>';
+                                            </h3>
+                                            
+                                            <div class="flex items-center gap-1">
+                                                <?php
+                                                for ($i = 1; $i <= 5; $i++) {
+                                                    if ($i <= round($average)) {
+                                                        echo '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-star h-3.5 w-3.5 fill-yellow-400 text-yellow-400"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+                                                    } else {
+                                                        echo '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-star h-3.5 w-3.5 text-gray-300"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+                                                    }
                                                 }
-                                            }
-                                            ?>
-                                            <span class="text-xs text-gray-500 ml-1">(<?php echo esc_html($review_count); ?>)</span>
-                                        </div>
-                                        <div class="flex items-center gap-2 mt-1">
-                                            <?php if ($product->is_on_sale()) : ?>
-                                                <span class="text-lg font-bold text-[#ed1c24]">
-                                                    <?php echo wc_price($product->get_sale_price()); ?>
-                                                </span>
-                                                <span class="text-base font-semibold text-gray-400 line-through">
-                                                    <?php echo wc_price($product->get_regular_price()); ?>
-                                                </span>
-                                            <?php else : ?>
-                                                <span class="text-lg font-bold text-gray-800">
-                                                    <?php echo wc_price($product->get_price()); ?>
-                                                </span>
-                                            <?php endif; ?>
+                                                ?>
+                                                <span class="text-xs text-gray-500 ml-1">(<?php echo esc_html($review_count); ?>)</span>
+                                            </div>
+                                            
+                                            <div class="flex items-center gap-2 pt-1">
+                                                <?php if ($product->is_on_sale()) : ?>
+                                                    <span class="font-bold text-[#ed1c24] text-lg">
+                                                        <?php echo wc_price($product->get_sale_price()); ?>
+                                                    </span>
+                                                    <span class="text-sm text-gray-400 line-through">
+                                                        <?php echo wc_price($product->get_regular_price()); ?>
+                                                    </span>
+                                                <?php else : ?>
+                                                    <span class="font-semibold text-gray-900 text-lg">
+                                                        <?php echo wc_price($product->get_price()); ?>
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
                                         </div>
                                     </div>
-                                </a>
-                            </div>
+                                </div>
+                            </a>
                     <?php
                         endwhile;
                     else :
@@ -1036,6 +1019,12 @@ function debouncedPriceSubmit() {
     priceTimeout = setTimeout(function() {
         submitFilters();
     }, 500); // Wait 500ms after user stops moving the slider
+}
+
+// Wishlist function
+function addToWishlist(productId) {
+    // Implement your wishlist logic here
+    showToast('Product added to wishlist!', 'success');
 }
 
 // Toast notification function
@@ -1169,13 +1158,13 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    console.log('Shop page initialized with add to cart functionality');
+    console.log('Shop page initialized with fixed add to cart functionality');
 });
 
 // jQuery compatibility for WooCommerce (if available)
 if (typeof jQuery !== 'undefined') {
     jQuery(document).ready(function($) {
-        // Handle WooCommerce cart events
+        // Handle WooCommerce events
         $('body').on('adding_to_cart', function(event, $button, data) {
             if ($button) {
                 $button.removeClass('added').addClass('loading');
@@ -1250,7 +1239,7 @@ if (typeof jQuery !== 'undefined') {
                     product_id = parent_with_id.data('product-id');
                  }
             }
-            
+
             if (!product_id || typeof yith_wcwl_l10n === 'undefined') {
                 location.reload(); // Fallback if we can't get info
                 return;
@@ -1272,7 +1261,7 @@ if (typeof jQuery !== 'undefined') {
                 success: function(response) {
                     // Manually trigger the 'removed' event so our other handler can update the style
                     $(document.body).trigger('yith_wcwl_product_removed', [el]);
-                    
+
                     // Let YITH update fragments if it provides them
                     if( response.fragments ){
                         $(document.body).trigger( 'yith_wcwl_fragments_refreshed', [ response.fragments ] );
@@ -1280,11 +1269,111 @@ if (typeof jQuery !== 'undefined') {
                 },
                 error: function() { location.reload(); } // Fallback
             });
-            
+
             return false;
         });
     });
 }
+
+// ... existing code ...
+</script>
+<style>
+/* YITH Wishlist Button: Only Heart Icon, No Text */
+.yith-wcwl-add-to-wishlist,
+.yith-wcwl-add-to-wishlist * {
+    font-size: 0 !important;
+    color: transparent !important;
+    text-indent: -9999px !important;
+    line-height: 0 !important;
+}
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 40px !important;
+    height: 40px !important;
+    background: white !important;
+    border-radius: 50% !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.10) !important;
+    transition: all 0.2s ease !important;
+    text-decoration: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    position: relative;
+    font-size: 0 !important;
+    color: transparent !important;
+}
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a:before,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:before,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a:before {
+    content: '';
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    background-size: contain;
+    background-repeat: no-repeat;
+    vertical-align: middle;
+    text-indent: 0;
+    margin: 0;
+}
+/* Outline heart (not in wishlist) */
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a:before {
+    position:absolute;
+    background-image: url('data:image/svg+xml;utf8,<svg fill="none" stroke="%236b7280" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>');
+}
+/* Filled white heart on red (in wishlist) */
+/* .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a {
+    background: #ed1c24 !important;
+} */
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:before,
+.yith-wcwl-add-to-wishlist.exists a:before {
+    background-image: url('data:image/svg+xml;utf8,<svg fill="%23ed1c24" stroke="%23ed1c24" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>');
+}
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:hover,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a:hover {
+    background: #d31920 !important;
+}
+/* Hide all text, links, and spans inside the button */
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a span,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a span,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a span,
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a .yith-wcwl-icon,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a .yith-wcwl-icon,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a .yith-wcwl-icon {
+    display: none !important;
+}
+/* Responsive */
+@media (max-width: 768px) {
+    .yith-wcwl-add-to-wishlist .yith-wcwl-add-button a,
+    .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a,
+    .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a {
+        width: 36px !important;
+        height: 36px !important;
+    }
+    .yith-wcwl-add-to-wishlist .yith-wcwl-add-button a:before,
+    .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a:before,
+    .yith-wcwl-add-to-wishlist .yith-wcwl-wishlistexistsbrowse a:before {
+        width: 20px !important;
+        height: 20px !important;
+    }
+}
+
+/* Loading state for wishlist button */
+.yith-wcwl-add-to-wishlist .yith-wcwl-add-button a.loading,
+.yith-wcwl-add-to-wishlist .yith-wcwl-wishlistaddedbrowse a.loading {
+    opacity: 0.5;
+    cursor: wait !important;
+}
+
+span.feedback{
+    display:none !important;
+}
+
+// ... existing code ...
 </script>
 
 <style>
@@ -1484,26 +1573,13 @@ li span.page-numbers.current {
     border-radius: 6px;
 }
 
-.product-badge {
-  display: inline-block;
-  position: absolute;
-  top: 18px;
-  left: 18px;
-  z-index: 20;
-  padding: 6px 12px;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  border-radius: 999px;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.10);
-  text-transform: uppercase;
-  line-height: 1;
+/* Line clamp utility for product titles */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
-.product-badge.sale { background: #ed1c24; }
-.product-badge.new { background: #2563eb; }
-.product-badge.limited { background: #a259e6; }
 
 /* Pixel-perfect design for the sorting dropdown */
 .woocommerce-ordering {
